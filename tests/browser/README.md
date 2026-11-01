@@ -95,3 +95,11 @@ NODE_PATH=/tmp/adelinha-browser/node_modules node tests/browser/client_regulariz
 ```
 
 Verifica 24 combinações de largura/cadastro (320, 390, 768 e 1440 px): completo, legado, dados faltantes, assinatura ausente, e-mail pendente e inativo. Inclui desenho por toque, preservação no redimensionamento/envio de código, regularização e entrada pelo Google. Relatório em `/tmp/adelinha-compliance-results`.
+
+Política de Privacidade e preservação do cadastro (servidor `serve_responsive.py`):
+
+```bash
+NODE_PATH=/tmp/adelinha-browser/node_modules node tests/browser/privacy.cjs
+```
+
+Confere as duas páginas públicas, rodapés, novas abas, dados/senha/código/assinatura mantidos no formulário e rascunho sem senha/código, inclusive com armazenamento bloqueado, nas sete larguras. Resultados em `/tmp/adelinha-privacy-results`.

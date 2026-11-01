@@ -302,3 +302,7 @@ Nova cláusula de indenização com compromisso contratual de até 30 dias corri
 ## Regularização do cadastro e série atual do contrato
 
 A Área do Cliente mostra pendências reais e permite completar dados e confirmar/assinar contratos sem recriar o cadastro nem sobrescrever aceites antigos. O Google usa o mesmo diagnóstico, com compatibilidade para assinaturas históricas válidas. A série atual exibe **Contrato — Versão 1**, com código exclusivo `ADELINHA-SERIE-2026-11-v1`, sem renumerar v2/v3. Veja [diagnóstico, histórico, auditoria e implantação](docs/regularizacao-cadastro-e-contrato.md).
+
+## Política de Privacidade e documentos públicos
+
+A rota pública `/privacidade` e os links do rodapé organizam o acesso à política e aos Termos de Serviço existentes em `/condicoes`. A política está identificada como **minuta para revisão antes da publicação definitiva**, com pendências operacionais e fontes oficiais cuja consulta foi bloqueada no ambiente. Consulte [revisão, evidências e URLs para o Google Cloud](docs/privacidade-revisao.md). Documentos abrem em nova aba para preservar os dados do cadastro e a assinatura; não acrescentam consentimento para publicidade.

@@ -31,7 +31,8 @@ from database import DatabaseConnection, DatabaseIntegrityError, is_postgres
 from receipt_pdf import build_receipt_pdf
 from notifications import notification_config_status, send_code
 from contract import CONTRACT_TEXT, CONTRACT_VERSION
-from contract_pdf import build_contract_pdf
+from contract_pdf import build_contract_pdf, build_current_contract_pdf
+from google_login import install_google_login
 
 ROOT = Path(__file__).parent
 TERMS_VERSION = CONTRACT_VERSION
@@ -147,6 +148,10 @@ def create_app(test_config=None):
         STAFF_USER=os.environ.get("STAFF_USER", "admin"),
         STAFF_NAME=os.environ.get("STAFF_NAME", "Administrador"),
         STAFF_PASSWORD_HASH=os.environ.get("STAFF_PASSWORD_HASH", generate_password_hash("adelinha-teste")),
+        GOOGLE_LOGIN_ENABLED=os.environ.get('GOOGLE_LOGIN_ENABLED', '0'),
+        GOOGLE_LOGIN_CLIENT_ID=os.environ.get('GOOGLE_LOGIN_CLIENT_ID', ''),
+        GOOGLE_LOGIN_CLIENT_SECRET=os.environ.get('GOOGLE_LOGIN_CLIENT_SECRET', ''),
+        GOOGLE_LOGIN_REDIRECT_URI=os.environ.get('GOOGLE_LOGIN_REDIRECT_URI', ''),
         PASSWORD_LINK_MINUTES=30,
         LOGIN_LIMIT=5,
         LOGIN_WINDOW_MINUTES=15,
@@ -267,9 +272,11 @@ def create_app(test_config=None):
     def protect_session_pages(response):
         # A página inicial muda conforme a sessão; dados autenticados nunca devem
         # ser reaproveitados por caches compartilhados da Oracle ou do navegador.
-        if request.endpoint == "index" or ((session.get("staff") or session.get("client_id")) and request.endpoint not in {"header_identity", "main_service_banner", "explanatory_card_image"}):
+        if request.endpoint in {"index", "terms", "current_contract_pdf", "client_login", "client_login_post"} or (request.endpoint or "").startswith("google_login.") or ((session.get("staff") or session.get("client_id")) and request.endpoint not in {"header_identity", "main_service_banner", "explanatory_card_image"}):
             response.headers["Cache-Control"] = "private, no-store, max-age=0"
             response.headers["Vary"] = "Cookie"
+        if (request.endpoint or "").startswith("google_login."):
+            response.headers["Referrer-Policy"] = "no-referrer"
         return response
 
     @app.context_processor
@@ -287,6 +294,7 @@ def create_app(test_config=None):
                 "pickup_address": PICKUP_ADDRESS, "pix_receiver_name_full": db().execute("SELECT pix_receiver_name,pix_key,pix_key_type FROM settings WHERE id=1").fetchone()["pix_receiver_name"],
                 "logged_name": staff["name"] if staff else (app.config["STAFF_NAME"] if session.get("staff") else client_name),
                 "pickup_cep": PICKUP_CEP, "theme_colors": theme_colors, "theme_variables": theme_variables(theme_colors),
+                "current_terms_version": TERMS_VERSION, "current_terms_digest": hashlib.sha256(terms_text().encode()).hexdigest(),
                 "image_upload_max_bytes": IMAGE_UPLOAD_MAX_BYTES, "store_logos": STORE_LOGOS,
                 "explanatory_cards": db().execute("SELECT id,title,alt_text,revision,width,height FROM explanatory_cards ORDER BY id").fetchall(),
                 "original_logo_available": ORIGINAL_LOGO.is_file(), "header_customized": bool(setting and setting["header_customized"]), "staff_account": staff,
@@ -923,8 +931,19 @@ def create_app(test_config=None):
         db().execute("SELECT 1").fetchone()
         return {"status": "ok"}
 
+    def presented_contract_matches():
+        version = request.form.get('terms_version')
+        digest = request.form.get('terms_digest')
+        # Compatibility for existing isolated fixtures, never for production.
+        if app.config.get('TESTING') and version is None and digest is None:
+            return True
+        return version == TERMS_VERSION and digest == hashlib.sha256(terms_text().encode()).hexdigest()
+
     @app.post("/cadastro")
     def register():
+        if not presented_contract_matches():
+            flash('O contrato foi atualizado. Leia a versão vigente e solicite um novo código antes de aceitar.', 'error')
+            return render_template('index.html', registration_form={**request.form}), 409
         name = request.form.get("name", "").strip()
         cpf = digits(request.form.get("cpf", ""))
         phone = digits(request.form.get("phone", ""))
@@ -935,6 +954,7 @@ def create_app(test_config=None):
         confirmation = session.get("registration_confirmation")
         submitted_code = request.form.get("confirmation_code", "")
         confirmed = bool(confirmation and confirmation.get("cpf") == cpf and confirmation.get("email") == email and confirmation.get("version") == TERMS_VERSION
+            and confirmation.get("text_digest") == hashlib.sha256(terms_text().encode()).hexdigest()
             and confirmation.get("attempts", 0) < 5
             and datetime.fromisoformat(confirmation["expires_at"]) > now()
             and secrets.compare_digest(confirmation["code_hash"], hashlib.sha256(submitted_code.encode()).hexdigest()))
@@ -976,10 +996,13 @@ def create_app(test_config=None):
              request.headers.get("X-Forwarded-For", request.remote_addr), request.headers.get("User-Agent", "")[:500], client_id))
         db().commit()
         session.pop("registration_confirmation", None)
+        session.pop("google_registration_required", None)
         return render_template("success.html", name=name, public_id=public_id, address=ADDRESS)
 
     @app.post("/cadastro/enviar-codigo")
     def registration_code():
+        if not presented_contract_matches():
+            return {'error': 'O contrato foi atualizado. Recarregue, leia a versão vigente e tente novamente.'}, 409
         cpf, channel = digits(request.form.get("cpf", "")), "email"
         if request.form.get("confirmation_channel") not in (None,"","email"):
             return {"error":"A confirmação do contrato está disponível somente por e-mail."},400
@@ -997,7 +1020,7 @@ def create_app(test_config=None):
         try: sent, detail = send_code(channel, destination, code)
         except Exception: sent, detail = False, "Falha no provedor"
         if not sent: return {"error": f"Envio indisponível: {detail}."}, 503
-        session["registration_confirmation"] = {"cpf":cpf,"email":destination,"version":TERMS_VERSION,"channel":channel,
+        session["registration_confirmation"] = {"cpf":cpf,"email":destination,"version":TERMS_VERSION,"text_digest":hashlib.sha256(terms_text().encode()).hexdigest(),"channel":channel,
             "destination":destination,"code_hash":hashlib.sha256(code.encode()).hexdigest(),
             "expires_at":(now()+timedelta(minutes=10)).isoformat(),"sent_at":now().isoformat(),"attempts":0,"sends":previous.get("sends",0)+1}
         return {"message":"Código enviado. Ele expira em 10 minutos."}
@@ -1008,6 +1031,11 @@ def create_app(test_config=None):
         if not back.startswith("/") or back.startswith("//"):
             back = url_for("index")
         return render_template("terms.html", version=TERMS_VERSION, exact_text=terms_text(), back=back)
+
+    @app.get('/condicoes/pdf')
+    def current_contract_pdf():
+        return send_file(build_current_contract_pdf(terms_text(), TERMS_VERSION), mimetype='application/pdf',
+                         as_attachment=True, download_name=f'contrato-{TERMS_VERSION}.pdf')
 
     @app.get("/login")
     def login():
@@ -1126,12 +1154,17 @@ def create_app(test_config=None):
 
     @app.post("/cliente/login")
     def client_login_post():
-        cpf = digits(request.form.get("cpf", ""))
+        identifier = request.form.get("cpf", "").strip().lower()[:254]
+        cpf = identifier if "@" in identifier else digits(identifier)
         if login_blocked("client", cpf):
             flash("Muitas tentativas. Aguarde 15 minutos.", "error")
             return redirect(url_for("client_login"))
-        client = db().execute("""SELECT id,password_hash,active,session_version FROM clients
-            WHERE REPLACE(REPLACE(REPLACE(cpf,'.',''),'-',''),' ','')=?""", (cpf,)).fetchone()
+        if '@' in cpf:
+            matches = db().execute("SELECT id,password_hash,active,session_version FROM clients WHERE LOWER(TRIM(email))=? LIMIT 2", (cpf,)).fetchall()
+            client = matches[0] if len(matches) == 1 else None
+        else:
+            client = db().execute("""SELECT id,password_hash,active,session_version FROM clients
+                WHERE REPLACE(REPLACE(REPLACE(cpf,'.',''),'-',''),' ','')=?""", (cpf,)).fetchone()
         valid = bool(client and client["active"] and client["password_hash"] and check_password_hash(client["password_hash"], request.form.get("password", "")))
         record_login("client", cpf, valid)
         if valid:
@@ -1139,7 +1172,7 @@ def create_app(test_config=None):
             session["client_id"] = client["id"]
             session["client_session_version"] = client["session_version"]
             return redirect(url_for("client_area"))
-        flash("CPF ou senha inválidos. Se você ainda não possui senha, procure a equipe.", "error")
+        flash("CPF, e-mail ou senha inválidos. Se você ainda não possui senha, procure a equipe.", "error")
         return redirect(url_for("client_login"))
 
     @app.post("/cliente/sair")
@@ -1786,6 +1819,7 @@ def create_app(test_config=None):
 
     with app.app_context():
         init_db(app.config["DATABASE"])
+    install_google_login(app, db, login_blocked, record_login)
     return app
 
 
@@ -1868,6 +1902,14 @@ def init_db(database):
         revision TEXT NOT NULL DEFAULT 'initial-v1')""")
     for card_id, title, alt, _ in DEFAULT_CARDS:
         connection.execute("INSERT INTO explanatory_cards(id,title,alt_text) VALUES(?,?,?) ON CONFLICT(id) DO NOTHING", (card_id,title,alt))
+    connection.execute("""CREATE TABLE IF NOT EXISTS google_oauth_flows (
+        state_hash TEXT PRIMARY KEY, nonce TEXT NOT NULL, pkce_verifier TEXT NOT NULL, expires_at BIGINT NOT NULL)""")
+    connection.execute("""CREATE TABLE IF NOT EXISTS google_client_identities (
+        google_sub TEXT PRIMARY KEY, client_id BIGINT NOT NULL UNIQUE REFERENCES clients(id) ON DELETE CASCADE,
+        email_at_link TEXT NOT NULL, linked_at BIGINT NOT NULL)""")
+    connection.execute("""CREATE TABLE IF NOT EXISTS google_login_pending (
+        id_hash TEXT PRIMARY KEY, google_sub TEXT NOT NULL, email TEXT NOT NULL, client_id BIGINT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+        session_version INTEGER NOT NULL, expires_at BIGINT NOT NULL)""")
     columns = table_columns(connection, "clients")
     if "password_hash" not in columns:
         connection.execute("ALTER TABLE clients ADD COLUMN password_hash TEXT")

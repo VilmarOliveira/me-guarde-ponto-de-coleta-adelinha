@@ -75,3 +75,14 @@ NODE_PATH=/tmp/adelinha-browser/node_modules node tests/browser/carousel_resume.
 ```
 
 Usa relógio controlado para comprovar os três segundos completos e eventos de ciclo de vida simulados em computador/celular. Inclui suspensão real de JavaScript no Chromium via CDP. Relatório em `/tmp/adelinha-carousel-results/report.json`. Limites de validação física em `docs/retomada-carrossel.md`.
+
+
+Contrato v3 e login com Google usam um servidor isolado próprio, sem acesso real ao Google nem envio de e-mails:
+
+```bash
+.venv/bin/python tests/browser/serve_google_login.py
+# Em outro terminal:
+NODE_PATH=/tmp/adelinha-browser/node_modules node tests/browser/google_login.cjs
+```
+
+São 24 cenários de navegador em 320, 390, 768 e 1440 px; a suíte pytest valida tokens RSA pela biblioteca oficial. O provedor visual é simulado. O teste também verifica fallback por senha, PDF vigente e rascunho antigo que exige novo aceite da v3, preservando os dados preenchidos.

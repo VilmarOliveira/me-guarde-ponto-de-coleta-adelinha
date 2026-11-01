@@ -293,3 +293,8 @@ Todos os campos de imagem aceitam PNG, JPG ou WebP de até **900 KB por arquivo*
 O mesmo sistema atende computador, tablet e celular. As regras de tela estão centralizadas em `static/responsive.css`; o menu se adapta ao espaço disponível, tabelas rolam apenas dentro de seus contêineres e assinaturas não são apagadas durante a rotação da tela.
 
 Consulte [a revisão e os resultados](docs/responsividade.md) e [as instruções dos testes de navegador](tests/browser/README.md).
+
+
+## Contrato v3 e acesso com Google
+
+Nova cláusula de indenização com compromisso contratual de até 30 dias corridos, preservando aceites e PDFs históricos. O login com Google é exclusivo de clientes previamente cadastrados e exige senha no primeiro vínculo. Fica desativado por padrão, separado da Gmail API. Veja as [instruções completas de Google Cloud e Oracle](docs/google-login-oracle.md), incluindo retorno OAuth, variáveis de `/etc/ponto-coleta/site.env`, comandos de atualização, proteção de logs e homologação.

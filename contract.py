@@ -1,5 +1,5 @@
 """Versão imutável do contrato vigente para novos aceites."""
-CONTRACT_VERSION = "CONTRATO-2026-v2"
+CONTRACT_VERSION = "CONTRATO-2026-v3"
 CONTRACT_TEXT = """CONTRATO DE PRESTAÇÃO DE SERVIÇOS DE RECEBIMENTO E ARMAZENAMENTO DE PACOTES
 
 CONTRATADA: AMOR INFINITO MARKETING E SOLUCOES EMPRESARIAIS, inscrita no CNPJ e situada no endereço e CEP informados nas configurações administrativas e exibidos neste documento, responsável pelo PONTO DE COLETA ADELINHA.
@@ -23,11 +23,22 @@ CONTRATANTE: pessoa identificada no cadastro vinculado a este instrumento, cujos
 5. CONTEÚDO, ORIGEM E CONSERVAÇÃO DOS PACOTES
 5.1 a 5.8. O serviço destina-se a conteúdo lícito. São proibidos produtos ilícitos, armas, munições, explosivos, inflamáveis, substâncias perigosas, animais vivos e itens que exijam refrigeração. A embalagem fechada não certifica conteúdo. Pacotes com risco podem ser recusados. Indícios concretos de crime serão comunicados às autoridades. O CONTRATANTE responde por sua conduta, sem afastar responsabilidades legais da CONTRATADA, que conservará embalagens com o cuidado legalmente exigido.
 
-5.9. RESPONSABILIDADE POR PERDA, EXTRAVIO OU AVARIA
-Em caso de perda, extravio ou avaria sob guarda da CONTRATADA, esta responderá por prejuízos decorrentes de falha no serviço, conforme a lei. O ressarcimento considerará o prejuízo efetivamente apurado por nota fiscal, comprovante de compra ou prova idônea; em documento com vários produtos, apenas itens atingidos. Na avaria, observará reparo, desvalorização ou perda integral. O ressarcimento não se limita ao preço do serviço, sem prejuízo de outros danos demonstrados e exclusões legais.
+5.9. RESPONSABILIDADE POR AVARIA E OUTRAS OCORRÊNCIAS
+A CONTRATADA responderá por avaria decorrente de falha no serviço, conforme a legislação aplicável. Na avaria, o prejuízo comprovado considerará o reparo, a desvalorização ou a perda integral e, em documentos com vários produtos, apenas os itens atingidos. O ressarcimento não se limita ao preço do serviço, sem prejuízo de outros danos demonstrados e das exclusões legais. Para perda, extravio, furto ou roubo de encomenda sob a guarda do ponto, aplica-se a cláusula 5.11.
 
 5.10. OBRIGAÇÕES DA CONTRATADA
 A CONTRATADA deverá: a) guardar e conservar contra chuva, umidade, quedas, esmagamento e acesso indevido; b) conferir documento oficial com foto e, para terceiro, autorização verificável; c) informar preços, limites, horários, prazos e encargos, sem cobrança constrangedora; d) proteger dados, documentos e assinaturas com controle de acesso, senhas e cópias de segurança; e) ao encaminhar, verificar autorização e endereço, acondicionar, registrar postagem e despesas, sem afastar responsabilidades legais.
+
+5.11. INDENIZAÇÃO POR ENCOMENDAS SOB A GUARDA DO PONTO
+Em caso de perda, extravio, furto ou roubo de encomenda comprovadamente recebida e sob a guarda da CONTRATADA no Ponto de Coleta Adelinha, havendo responsabilidade desta conforme a legislação aplicável, a análise e o pagamento da indenização serão concluídos em até 30 dias corridos, contados da comunicação da ocorrência e da apresentação dos documentos necessários à comprovação do conteúdo e do prejuízo.
+
+A comprovação poderá ser realizada por nota fiscal, comprovante do pedido, comprovante de pagamento ou outros meios idôneos. Documentos complementares somente poderão ser solicitados de forma justificada, sem exigências desnecessárias ou prorrogação injustificada do prazo.
+
+O ressarcimento considerará o prejuízo material comprovado, não ficando limitado ao valor cobrado pelo serviço de recebimento e armazenamento, sem prejuízo de outros danos indenizáveis demonstrados e das hipóteses legais de exclusão de responsabilidade.
+
+O pagamento não dependerá do encerramento de investigação policial nem do recebimento de valores de seguradora.
+
+O prazo de 30 dias desta cláusula constitui compromisso contratual adotado pelo ponto, não um prazo obrigatório estabelecido em lei.
 
 6. ENCAMINHAMENTO AO ENDEREÇO RESIDENCIAL APÓS 10 DIAS SEM RETIRADA
 6.1. Após 10 dias corridos desde a confirmação do aviso, o pacote poderá ser encaminhado a partir do 11º dia. 6.2. O CONTRATANTE autoriza o encaminhamento e o frete de menor valor compatível. 6.3. Frete, armazenamento e atraso serão calculados até a postagem. 6.4. O comprovante da despesa será disponibilizado.

@@ -261,8 +261,8 @@ if (registrationForm) {
       && saved.terms_digest === registrationForm.elements.terms_digest.value;
     registrationForm.restoreSignature?.(saved.signature);
   } catch (_error) { /* armazenamento indisponível não impede o cadastro */ }
-  registrationForm.querySelector('.terms-link')?.addEventListener('click', () => {
-    sessionStorage.setItem(storageKey, JSON.stringify({
+  const saveRegistrationDraft = () => {
+    try { sessionStorage.setItem(storageKey, JSON.stringify({
       name: registrationForm.elements.name.value,
       cpf: registrationForm.elements.cpf.value,
       phone: registrationForm.elements.phone.value,
@@ -278,8 +278,9 @@ if (registrationForm) {
       terms_digest: registrationForm.elements.terms_digest.value,
       terms_accept: registrationForm.elements.terms_accept.checked,
       signature: registrationForm.querySelector('input[name="signature"]').value,
-    }));
-  });
+    })); } catch (_) { /* Documentos abrem em outra aba; o formulário original permanece intacto. */ }
+  };
+  document.querySelectorAll('.terms-link, [data-registration-document]').forEach(link => link.addEventListener('click', saveRegistrationDraft));
   registrationForm.addEventListener('submit', () => sessionStorage.removeItem(storageKey));
 }
 

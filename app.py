@@ -31,6 +31,7 @@ from database import DatabaseConnection, DatabaseIntegrityError, is_postgres
 from receipt_pdf import build_receipt_pdf
 from notifications import notification_config_status, send_code
 from contract import CONTRACT_TEXT, CONTRACT_VERSION, CONTRACT_LABEL
+from privacy_policy import PRIVACY_UPDATED, PRIVACY_CONTACT as PRIVACY_EMAIL, PRIVACY_REVIEW_PENDING
 from client_compliance import FIELDS as CONTRACT_FIELDS, compliance, effective_record, signature_data
 from client_regularization import install_regularization
 from contract_pdf import build_contract_pdf, build_current_contract_pdf
@@ -276,7 +277,7 @@ def create_app(test_config=None):
     def protect_session_pages(response):
         # A página inicial muda conforme a sessão; dados autenticados nunca devem
         # ser reaproveitados por caches compartilhados da Oracle ou do navegador.
-        if request.endpoint in {"index", "terms", "current_contract_pdf", "client_login", "client_login_post"} or (request.endpoint or "").startswith("google_login.") or ((session.get("staff") or session.get("client_id")) and request.endpoint not in {"header_identity", "main_service_banner", "explanatory_card_image"}):
+        if request.endpoint in {"index", "terms", "current_contract_pdf", "client_login", "client_login_post", "privacy"} or (request.endpoint or "").startswith("google_login.") or ((session.get("staff") or session.get("client_id")) and request.endpoint not in {"header_identity", "main_service_banner", "explanatory_card_image"}):
             response.headers["Cache-Control"] = "private, no-store, max-age=0"
             response.headers["Vary"] = "Cookie"
         if (request.endpoint or "").startswith("google_login."):
@@ -1028,6 +1029,13 @@ def create_app(test_config=None):
             "destination":destination,"code_hash":hashlib.sha256(code.encode()).hexdigest(),
             "expires_at":(now()+timedelta(minutes=10)).isoformat(),"sent_at":now().isoformat(),"attempts":0,"sends":previous.get("sends",0)+1}
         return {"message":"Código enviado. Ele expira em 10 minutos."}
+
+    @app.get('/privacidade')
+    def privacy():
+        back=request.args.get('next','/')
+        if not back.startswith('/') or back.startswith('//') or '\\' in back or any(ord(c)<32 for c in back):
+            back=url_for('index')
+        return render_template('privacy.html',back=back,updated=PRIVACY_UPDATED,contact=PRIVACY_EMAIL,review_pending=PRIVACY_REVIEW_PENDING)
 
     @app.get("/condicoes")
     def terms():

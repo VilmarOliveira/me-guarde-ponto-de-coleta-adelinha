@@ -43,7 +43,7 @@ try{
  await page.goto(BASE+'/');
  await page.evaluate(()=>sessionStorage.setItem('adelinha-registration-draft',JSON.stringify({name:'Rascunho anterior',terms_accept:true,terms_version:'CONTRATO-2026-v2',terms_digest:'old'})));
  await page.reload();assert.equal(await page.locator('#registration-form [name=name]').inputValue(),'Rascunho anterior');assert(!(await page.locator('[name=terms_accept]').isChecked()));
- await page.locator('[name=terms_accept]').check();await page.locator('.terms-link').click();await page.getByRole('link',{name:'Voltar',exact:false}).click();
+ await page.locator('[name=terms_accept]').check();const opened=page.waitForEvent('popup');await page.locator('.terms-link').click();const contractTab=await opened;await contractTab.waitForLoadState();await contractTab.close();await page.reload();
  assert(await page.locator('[name=terms_accept]').isChecked());
  fs.mkdirSync('/tmp/adelinha-google-results',{recursive:true});fs.writeFileSync('/tmp/adelinha-google-results/report.json',JSON.stringify({passed:true,cases,provider:'simulated; signed-token checks in pytest'},null,2));
  console.log(`PASS ${cases.length} desktop/mobile OAuth scenarios, disabled integration, password fallback and contract PDF.`);

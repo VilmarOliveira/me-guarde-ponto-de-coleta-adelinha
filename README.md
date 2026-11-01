@@ -298,3 +298,7 @@ Consulte [a revisão e os resultados](docs/responsividade.md) e [as instruções
 ## Contrato v3 e acesso com Google
 
 Nova cláusula de indenização com compromisso contratual de até 30 dias corridos, preservando aceites e PDFs históricos. O login com Google é exclusivo de clientes previamente cadastrados e exige senha no primeiro vínculo. Fica desativado por padrão, separado da Gmail API. Veja as [instruções completas de Google Cloud e Oracle](docs/google-login-oracle.md), incluindo retorno OAuth, variáveis de `/etc/ponto-coleta/site.env`, comandos de atualização, proteção de logs e homologação.
+
+## Regularização do cadastro e série atual do contrato
+
+A Área do Cliente mostra pendências reais e permite completar dados e confirmar/assinar contratos sem recriar o cadastro nem sobrescrever aceites antigos. O Google usa o mesmo diagnóstico, com compatibilidade para assinaturas históricas válidas. A série atual exibe **Contrato — Versão 1**, com código exclusivo `ADELINHA-SERIE-2026-11-v1`, sem renumerar v2/v3. Veja [diagnóstico, histórico, auditoria e implantação](docs/regularizacao-cadastro-e-contrato.md).

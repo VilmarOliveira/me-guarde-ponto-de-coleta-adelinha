@@ -86,3 +86,12 @@ NODE_PATH=/tmp/adelinha-browser/node_modules node tests/browser/google_login.cjs
 ```
 
 São 24 cenários de navegador em 320, 390, 768 e 1440 px; a suíte pytest valida tokens RSA pela biblioteca oficial. O provedor visual é simulado. O teste também verifica fallback por senha, PDF vigente e rascunho antigo que exige novo aceite da v3, preservando os dados preenchidos.
+
+Regularização e nova série do contrato, com o mesmo servidor local de Google:
+
+```bash
+.venv/bin/python tests/browser/serve_google_login.py
+NODE_PATH=/tmp/adelinha-browser/node_modules node tests/browser/client_regularization.cjs
+```
+
+Verifica 24 combinações de largura/cadastro (320, 390, 768 e 1440 px): completo, legado, dados faltantes, assinatura ausente, e-mail pendente e inativo. Inclui desenho por toque, preservação no redimensionamento/envio de código, regularização e entrada pelo Google. Relatório em `/tmp/adelinha-compliance-results`.

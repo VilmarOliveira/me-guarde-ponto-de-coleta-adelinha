@@ -14,6 +14,7 @@ from google.oauth2 import id_token
 from werkzeug.security import check_password_hash
 from database import DatabaseIntegrityError
 from core import valid_cpf
+from client_compliance import diagnostics, compliance
 
 NO_ACCOUNT = 'Para entrar com o Google, primeiro faça seu cadastro no site. Utilize o mesmo e-mail da sua conta Google.'
 FAILURE = 'Não foi possível validar o acesso com Google. Tente novamente ou entre com CPF ou e-mail e senha.'
@@ -70,20 +71,19 @@ def verified_identity(code, flow, config):
     return sub, email.strip().lower()
 
 
-def eligibility(client):
+def eligibility(client, record=None, email_confirmed=False):
     if not client['active']:
         return 'Este cadastro está inativo. Procure a equipe do ponto para regularizá-lo; o acesso não foi autorizado.'
-    required = ('name','cpf','phone','email','password_hash','terms_version','terms_text','signature','accepted_at',
-                'contract_id','contract_hash','confirmation_validated_at','confirmation_destination',
-                'residential_cep','residential_street','residential_number','residential_district','residential_city','residential_state')
-    if (any(not client[key] for key in required) or not valid_cpf(client['cpf'])
-        or not client['signature'].startswith('data:image/png;base64,')
-        or client['confirmation_channel'] != 'email'):
-        return 'Seu cadastro possui etapas pendentes de dados, assinatura, aceite ou confirmação do contrato por e-mail. Entre com CPF ou e-mail e senha para conferir seus dados e procure a equipe do ponto para concluir as pendências, sem refazer o cadastro.'
+    if diagnostics(client, record, email_confirmed):
+        return 'Seu cadastro possui etapas pendentes. Entre com CPF ou e-mail e senha e consulte a lista em Área do Cliente → Pendências do cadastro para regularizar, sem refazer o cadastro.'
     return None
 
 
 def install_google_login(app, db, login_blocked, record_login):
+    def check_eligibility(client):
+        record, missing = compliance(db(),client)
+        return eligibility(client,record,not any(item['key']=='email_confirmation' for item in missing))
+
     bp = Blueprint('google_login', __name__, url_prefix='/cliente/google')
     digest = lambda value: hashlib.sha256(value.encode()).hexdigest()
 
@@ -159,7 +159,7 @@ def install_google_login(app, db, login_blocked, record_login):
             return fail()
         linked = db().execute('SELECT c.* FROM clients c JOIN google_client_identities g ON g.client_id=c.id WHERE g.google_sub=?', (sub,)).fetchone()
         if linked:
-            problem = eligibility(linked)
+            problem = check_eligibility(linked)
             return fail(problem) if problem else complete(linked)
         matches = db().execute('SELECT * FROM clients WHERE LOWER(TRIM(email))=? LIMIT 2', (email,)).fetchall()
         if not matches:
@@ -167,7 +167,7 @@ def install_google_login(app, db, login_blocked, record_login):
             return redirect(url_for('index',_anchor='cadastro'))
         if len(matches)!=1: return fail('Mais de um cadastro utiliza este e-mail. Procure a equipe para regularizar o cadastro antes de vincular o Google.')
         client = matches[0]
-        problem = eligibility(client)
+        problem = check_eligibility(client)
         if problem: return fail(problem)
         if db().execute('SELECT 1 FROM google_client_identities WHERE client_id=?', (client['id'],)).fetchone():
             return fail('Este cadastro já possui outra identidade Google vinculada. Use a conta vinculada ou entre com sua senha.')
@@ -195,7 +195,7 @@ def install_google_login(app, db, login_blocked, record_login):
             return fail('Vinculação cancelada. Você pode continuar entrando com sua senha.')
         client = db().execute('SELECT * FROM clients WHERE id=?',(pending['client_id'],)).fetchone()
         if not client: return fail()
-        problem = eligibility(client)
+        problem = check_eligibility(client)
         if problem: return fail(problem)
         if client['email'].strip().lower()!=pending['email'] or client['session_version']!=pending['session_version']: return fail('O cadastro mudou. Inicie novamente a vinculação.')
         identifier = str(client['id'])
@@ -211,7 +211,7 @@ def install_google_login(app, db, login_blocked, record_login):
                 # Recheck account status and consume the ticket in the same write transaction.
                 fresh = db().execute('SELECT * FROM clients WHERE id=?',(client['id'],)).fetchone()
                 consumed = db().execute('DELETE FROM google_login_pending WHERE id_hash=? AND expires_at>? RETURNING id_hash',(digest(ticket),int(time.time()))).fetchone()
-                if not consumed or not fresh or eligibility(fresh) or fresh['session_version']!=pending['session_version'] or fresh['email'].strip().lower()!=pending['email']:
+                if not consumed or not fresh or check_eligibility(fresh) or fresh['session_version']!=pending['session_version'] or fresh['email'].strip().lower()!=pending['email']:
                     db().rollback(); return fail('A confirmação expirou ou o cadastro mudou. Inicie novamente.')
                 db().execute('INSERT INTO google_client_identities(google_sub,client_id,email_at_link,linked_at) VALUES(?,?,?,?)', (pending['google_sub'],client['id'],pending['email'],int(time.time())))
                 db().commit()

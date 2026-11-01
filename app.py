@@ -30,7 +30,9 @@ from core import (
 from database import DatabaseConnection, DatabaseIntegrityError, is_postgres
 from receipt_pdf import build_receipt_pdf
 from notifications import notification_config_status, send_code
-from contract import CONTRACT_TEXT, CONTRACT_VERSION
+from contract import CONTRACT_TEXT, CONTRACT_VERSION, CONTRACT_LABEL
+from client_compliance import FIELDS as CONTRACT_FIELDS, compliance, effective_record, signature_data
+from client_regularization import install_regularization
 from contract_pdf import build_contract_pdf, build_current_contract_pdf
 from google_login import install_google_login
 
@@ -45,7 +47,7 @@ PICKUP_ADDRESS = "RUA AFONSO BORGES DE FREITAS, 795, JARDIM ADELINHA, FRANCA –
 PICKUP_CEP = os.environ.get("PICKUP_CEP", "14406-848")
 PRIVACY_CONTACT = os.environ.get("PRIVACY_CONTACT", "(16) 98800-4966")
 ADDRESS = PICKUP_ADDRESS  # compatibilidade com comprovantes e integrações existentes
-CLIENT_COLUMNS = "id,public_id,name,cpf,phone,email,terms_version,terms_text,signature,accepted_at,active,session_version,residential_cep,residential_street,residential_number,residential_district,residential_city,residential_state,residential_complement,legacy_public_id,contract_public_id,document_brand_version,document_logo_present"
+CLIENT_COLUMNS = "id,public_id,name,cpf,phone,email,terms_version,terms_text,signature,accepted_at,active,session_version,residential_cep,residential_street,residential_number,residential_district,residential_city,residential_state,residential_complement,legacy_public_id,contract_public_id,document_brand_version,document_logo_present,terms_display_label"
 PACKAGE_COLUMNS = "id,public_id,client_id,tracking,width,height,length,weight,shelf,category,base_price,status,created_at,notified_at,picked_at"
 PICKUP_COLUMNS = "id,receiver_name,receiver_document,document_type,signature,staff,picked_at,base_total,late_total,total_paid,payment_method,payment_confirmed,payment_confirmed_at,payment_confirmed_by,discount_type,discount_input,discount_amount,original_total,final_total,discount_applied_by,surcharge_amount,surcharge_reason,surcharge_applied_by,pix_key_snapshot,pix_receiver_snapshot,pix_key_type_snapshot,document_brand_version,document_logo_present"
 PICKUP_PACKAGE_COLUMNS = "pickup_id,package_id,base_amount,late_amount,package_public_id,client_id,client_name,client_public_id,tracking_code,package_category,notified_at,service_amount,late_days,total_amount"
@@ -152,6 +154,8 @@ def create_app(test_config=None):
         GOOGLE_LOGIN_CLIENT_ID=os.environ.get('GOOGLE_LOGIN_CLIENT_ID', ''),
         GOOGLE_LOGIN_CLIENT_SECRET=os.environ.get('GOOGLE_LOGIN_CLIENT_SECRET', ''),
         GOOGLE_LOGIN_REDIRECT_URI=os.environ.get('GOOGLE_LOGIN_REDIRECT_URI', ''),
+        CURRENT_DOCUMENT_BRAND=BRAND_VERSION,
+        CURRENT_DOCUMENT_LOGO=int(ORIGINAL_LOGO.is_file()),
         PASSWORD_LINK_MINUTES=30,
         LOGIN_LIMIT=5,
         LOGIN_WINDOW_MINUTES=15,
@@ -294,7 +298,7 @@ def create_app(test_config=None):
                 "pickup_address": PICKUP_ADDRESS, "pix_receiver_name_full": db().execute("SELECT pix_receiver_name,pix_key,pix_key_type FROM settings WHERE id=1").fetchone()["pix_receiver_name"],
                 "logged_name": staff["name"] if staff else (app.config["STAFF_NAME"] if session.get("staff") else client_name),
                 "pickup_cep": PICKUP_CEP, "theme_colors": theme_colors, "theme_variables": theme_variables(theme_colors),
-                "current_terms_version": TERMS_VERSION, "current_terms_digest": hashlib.sha256(terms_text().encode()).hexdigest(),
+                "current_contract_label": CONTRACT_LABEL, "current_terms_version": TERMS_VERSION, "current_terms_digest": hashlib.sha256(terms_text().encode()).hexdigest(),
                 "image_upload_max_bytes": IMAGE_UPLOAD_MAX_BYTES, "store_logos": STORE_LOGOS,
                 "explanatory_cards": db().execute("SELECT id,title,alt_text,revision,width,height FROM explanatory_cards ORDER BY id").fetchall(),
                 "original_logo_available": ORIGINAL_LOGO.is_file(), "header_customized": bool(setting and setting["header_customized"]), "staff_account": staff,
@@ -990,14 +994,14 @@ def create_app(test_config=None):
         )
         client_id = cur.fetchone()["id"]
         integrity = hashlib.sha256((public_id + name + cpf + terms_text() + signature + accepted_at).encode()).hexdigest()
-        db().execute("UPDATE clients SET contract_id=?,contract_hash=?,contract_public_id=?,document_brand_version=?,document_logo_present=?,confirmation_channel=?,confirmation_destination=?,confirmation_validated_at=?,accept_ip=?,accept_user_agent=? WHERE id=?",
+        db().execute("UPDATE clients SET contract_id=?,contract_hash=?,contract_public_id=?,document_brand_version=?,document_logo_present=?,confirmation_channel=?,confirmation_destination=?,confirmation_validated_at=?,accept_ip=?,accept_user_agent=?,terms_display_label=? WHERE id=?",
             (f"CTRPCA-{client_id}", integrity, public_id, BRAND_VERSION, int(ORIGINAL_LOGO.is_file()), confirmation.get("channel") if confirmation else "teste",
              confirmation.get("destination") if confirmation else None, accepted_at,
-             request.headers.get("X-Forwarded-For", request.remote_addr), request.headers.get("User-Agent", "")[:500], client_id))
+             request.headers.get("X-Forwarded-For", request.remote_addr), request.headers.get("User-Agent", "")[:500], CONTRACT_LABEL, client_id))
         db().commit()
         session.pop("registration_confirmation", None)
         session.pop("google_registration_required", None)
-        return render_template("success.html", name=name, public_id=public_id, address=ADDRESS)
+        return render_template("success.html", name=name, public_id=public_id, address=ADDRESS, contract_label=CONTRACT_LABEL, contract_version=TERMS_VERSION)
 
     @app.post("/cadastro/enviar-codigo")
     def registration_code():
@@ -1030,11 +1034,11 @@ def create_app(test_config=None):
         back = request.args.get("next", "")
         if not back.startswith("/") or back.startswith("//"):
             back = url_for("index")
-        return render_template("terms.html", version=TERMS_VERSION, exact_text=terms_text(), back=back)
+        return render_template("terms.html", version=TERMS_VERSION, exact_text=terms_text(), back=back, contract_label=CONTRACT_LABEL)
 
     @app.get('/condicoes/pdf')
     def current_contract_pdf():
-        return send_file(build_current_contract_pdf(terms_text(), TERMS_VERSION), mimetype='application/pdf',
+        return send_file(build_current_contract_pdf(terms_text(), TERMS_VERSION, CONTRACT_LABEL), mimetype='application/pdf',
                          as_attachment=True, download_name=f'contrato-{TERMS_VERSION}.pdf')
 
     @app.get("/login")
@@ -1183,7 +1187,8 @@ def create_app(test_config=None):
     @app.get("/cliente")
     @client_login_required
     def client_area():
-        client = db().execute(f"SELECT {CLIENT_COLUMNS} FROM clients WHERE id=?", (session["client_id"],)).fetchone()
+        client = db().execute("SELECT * FROM clients WHERE id=?", (session["client_id"],)).fetchone()
+        _, pending_items = compliance(db(), client)
         page, page_size, offset = pagination()
         package_rows = db().execute(f"SELECT {PACKAGE_COLUMNS} FROM packages WHERE client_id=? ORDER BY created_at DESC LIMIT ? OFFSET ?", (client["id"], page_size + 1, offset)).fetchall()
         has_next = len(package_rows) > page_size
@@ -1197,7 +1202,7 @@ def create_app(test_config=None):
                     day = (now().date() - datetime.fromisoformat(package["notified_at"]).astimezone(TZ).date()).days + 1
                     item["deadline_alert"] = "ending" if day in (3, 4) else ("late" if day >= 5 else None)
                 pending.append(item)
-        return render_template("client_area.html", client=client, pending=pending, packages=packages, page=page, has_next=has_next)
+        return render_template("client_area.html", client=client, pending=pending, packages=packages, page=page, has_next=has_next, pending_items=pending_items)
 
     @app.route("/cliente/editar", methods=["GET", "POST"])
     @client_login_required
@@ -1226,13 +1231,15 @@ def create_app(test_config=None):
     @client_login_required
     def client_contract_pdf():
         client = db().execute(f"SELECT {CLIENT_COLUMNS} FROM clients WHERE id=?", (session["client_id"],)).fetchone()
+        client = effective_record(db(), db().execute('SELECT * FROM clients WHERE id=?',(session['client_id'],)).fetchone())
         return send_file(build_contract_pdf(client), mimetype="application/pdf", as_attachment=True, download_name=f"contrato-{client['public_id']}.pdf")
 
     @app.get("/cliente/condicoes-aceitas")
     @client_login_required
     def client_accepted_terms():
         client = db().execute(f"SELECT {CLIENT_COLUMNS} FROM clients WHERE id=?", (session["client_id"],)).fetchone()
-        return render_template("accepted_terms.html", client=client)
+        client = effective_record(db(), db().execute('SELECT * FROM clients WHERE id=?',(session['client_id'],)).fetchone())
+        return render_template("accepted_terms.html", client=client, signature_preview=signature_data(client.get('signature')))
 
     @app.get("/cliente/comprovantes/<int:pickup_id>")
     @client_login_required
@@ -1363,7 +1370,7 @@ def create_app(test_config=None):
         linked = db().execute("SELECT COUNT(*) AS total FROM packages WHERE client_id=?", (client_id,)).fetchone()["total"]
         if pending:
             flash("Não é possível excluir ou desativar enquanto houver pacotes pendentes.", "error")
-        elif linked or client["signature"] or client["terms_version"]:
+        elif linked or client["signature"] or client["terms_version"] or db().execute("SELECT 1 FROM client_contract_records WHERE client_id=?", (client_id,)).fetchone():
             db().execute("UPDATE clients SET active=0,session_version=session_version+1 WHERE id=?", (client_id,))
             audit("desativar", "cliente", client_id, "histórico preservado")
             db().commit()
@@ -1820,6 +1827,7 @@ def create_app(test_config=None):
     with app.app_context():
         init_db(app.config["DATABASE"])
     install_google_login(app, db, login_blocked, record_login)
+    install_regularization(app, db, client_login_required, now, lambda *args: send_code(*args), residential_address_form, valid_residential_address, lambda: (TERMS_VERSION, CONTRACT_LABEL, terms_text()))
     return app
 
 
@@ -1922,6 +1930,20 @@ def init_db(database):
         "confirmation_channel": "TEXT", "confirmation_destination": "TEXT", "confirmation_validated_at": "TEXT",
         "accept_ip": "TEXT", "accept_user_agent": "TEXT",
         "legacy_public_id": "TEXT", "contract_public_id": "TEXT", "document_brand_version": "TEXT", "document_logo_present": "INTEGER NOT NULL DEFAULT 0"})
+    ensure_columns(connection, 'clients', {'terms_display_label':'TEXT'})
+    snapshot_columns=','.join(name + (' INTEGER' if name=='document_logo_present' else ' TEXT') for name in CONTRACT_FIELDS)
+    connection.execute(f"""CREATE TABLE IF NOT EXISTS client_contract_records (
+        id {id_type}, client_id BIGINT NOT NULL REFERENCES clients(id), source TEXT NOT NULL,
+        recorded_at TEXT NOT NULL,{snapshot_columns})""")
+    connection.execute("CREATE INDEX IF NOT EXISTS idx_client_contract_owner ON client_contract_records(client_id,id)")
+    connection.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_client_original_contract ON client_contract_records(client_id) WHERE source='legacy'")
+    connection.execute(f"""CREATE TABLE IF NOT EXISTS client_contract_email_confirmations (
+        id {id_type}, client_id BIGINT NOT NULL REFERENCES clients(id), acceptance_key TEXT NOT NULL,
+        email TEXT NOT NULL,confirmed_at TEXT NOT NULL,accept_ip TEXT,accept_user_agent TEXT)""")
+    connection.execute("CREATE INDEX IF NOT EXISTS idx_client_confirmation_owner ON client_contract_email_confirmations(client_id,acceptance_key)")
+    connection.execute("""CREATE TABLE IF NOT EXISTS client_regularization_codes (
+        client_id BIGINT PRIMARY KEY REFERENCES clients(id) ON DELETE CASCADE, scope_hash TEXT NOT NULL,
+        code_hash TEXT NOT NULL,expires_at BIGINT NOT NULL,attempts INTEGER NOT NULL,sent_at BIGINT NOT NULL,sends INTEGER NOT NULL,window_start BIGINT NOT NULL)""")
     ensure_columns(connection, "pickups", {"payment_method": "TEXT", "document_type": "TEXT", "payment_confirmed_at": "TEXT", "payment_confirmed_by": "TEXT",
         "discount_type": "TEXT", "discount_input": "REAL", "discount_amount": "REAL", "original_total": "REAL",
         "final_total": "REAL", "discount_applied_by": "TEXT", "surcharge_amount": "REAL", "surcharge_reason": "TEXT",

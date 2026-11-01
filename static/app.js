@@ -758,3 +758,21 @@ if (cardDialog && typeof cardDialog.showModal === 'function') {
     opener?.focus({preventScroll:true});
   });
 }
+
+// Requesting another email code must not clear a signature already drawn.
+document.querySelectorAll('[data-regularization-email]').forEach(form => {
+  form.addEventListener('submit', async event => {
+    event.preventDefault();
+    const button = form.querySelector('button');
+    const status = form.querySelector('[data-email-status]');
+    button.disabled = true;
+    status.textContent = 'Enviando código…';
+    try {
+      const response = await fetch(form.getAttribute('action') || location.href, {method:'POST',body:new FormData(form),credentials:'same-origin'});
+      const page = new DOMParser().parseFromString(await response.text(), 'text/html');
+      const messages = [...page.querySelectorAll('.flash')].map(node => node.textContent.trim());
+      status.textContent = messages.join(' ') || (response.ok ? 'Confira seu e-mail.' : 'Não foi possível enviar o código. Tente novamente.');
+    } catch (_) { status.textContent = 'Não foi possível enviar o código. Confira a conexão e tente novamente.'; }
+    finally { button.disabled = false; }
+  });
+});

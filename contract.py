@@ -1,5 +1,6 @@
 """Versão imutável do contrato vigente para novos aceites."""
-CONTRACT_VERSION = "CONTRATO-2026-v3"
+CONTRACT_VERSION = "ADELINHA-SERIE-2026-11-v1"
+CONTRACT_LABEL = "Contrato — Versão 1"
 CONTRACT_TEXT = """CONTRATO DE PRESTAÇÃO DE SERVIÇOS DE RECEBIMENTO E ARMAZENAMENTO DE PACOTES
 
 CONTRATADA: AMOR INFINITO MARKETING E SOLUCOES EMPRESARIAIS, inscrita no CNPJ e situada no endereço e CEP informados nas configurações administrativas e exibidos neste documento, responsável pelo PONTO DE COLETA ADELINHA.

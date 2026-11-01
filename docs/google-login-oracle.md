@@ -1,3 +1,5 @@
+> Atualização posterior: a série vigente e a regularização de pendências estão descritas em [Regularização do cadastro e contrato](regularizacao-cadastro-e-contrato.md). As credenciais e URLs OAuth deste guia continuam iguais.
+
 # Contrato v3 e login com Google: implantação na Oracle
 
 ## O que é entregue

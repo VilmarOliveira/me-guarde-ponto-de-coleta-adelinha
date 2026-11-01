@@ -33,18 +33,21 @@ def build_contract_pdf(client):
     code = client["contract_public_id"] if "contract_public_id" in client.keys() else None
     code = code or client["public_id"]
     line(f"Contratante: {client['name']} | CPF: {client['cpf']} | Código: {code}")
+    if 'terms_display_label' in client.keys() and client['terms_display_label']: line(client['terms_display_label'],True)
     line(f"Versão: {client['terms_version']} | Aceite: {client['accepted_at']}")
     for paragraph in (client['terms_text'] or 'Texto histórico não registrado').splitlines(): line(paragraph, paragraph[:2].rstrip('.').isdigit() or paragraph.isupper())
     if y<150: pdf.showPage(); y=height-45; brand_page()
     line('Assinatura registrada:',True)
-    signature=client['signature']
-    if signature and signature.startswith('data:image/png;base64,'):
+    original_signature=client['signature']
+    from client_compliance import signature_data
+    signature=signature_data(original_signature)
+    if signature:
         pdf.drawImage(ImageReader(BytesIO(base64.b64decode(signature.split(',',1)[1]))),45,y-95,width=260,height=90,preserveAspectRatio=True)
-    else: line('Não registrado')
+    else: line('Assinatura original preservada; imagem não reconhecida' if original_signature else 'Não registrado')
     pdf.save(); out.seek(0); return out
 
 
-def build_current_contract_pdf(text, version):
+def build_current_contract_pdf(text, version, label=None):
     """Unsigned current version, separate from immutable signed snapshots."""
     from html import escape
     from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
@@ -54,7 +57,7 @@ def build_current_contract_pdf(text, version):
     output = BytesIO()
     style = ParagraphStyle('contract', fontName=normal, fontSize=10, leading=15, spaceAfter=8)
     heading = ParagraphStyle('heading', parent=style, fontName=bold, fontSize=12, leading=17)
-    story = [Paragraph(escape(version) + ' — contrato vigente, sem aceite', heading), Spacer(1, 10)]
+    story = [Paragraph(escape(label or version), heading), Paragraph(escape(version) + ' — contrato vigente, sem aceite', style), Spacer(1, 10)]
     for paragraph in text.split('\n\n'):
         story.append(Paragraph(escape(paragraph).replace('\n', '<br/>'), style))
     SimpleDocTemplate(output, pagesize=A4, rightMargin=45, leftMargin=45, topMargin=45, bottomMargin=45).build(story)

@@ -38,7 +38,7 @@ try{
  const page=await browser.newPage();await page.goto(BASE+'/cliente/login');let csrf=await page.locator('meta[name=csrf-token]').getAttribute('content');
  await page.request.post(BASE+'/__google/config',{form:{enabled:'0',csrf_token:csrf}});await page.reload();assert.equal(await page.locator('.google-signin').count(),0);
  await page.locator('[name=cpf]').fill('cliente@example.com');await page.locator('[name=password]').fill('senha-segura');await page.getByRole('button',{name:'Entrar',exact:true}).click();await page.waitForURL('**/cliente');
- await page.goto(BASE+'/condicoes');assert(await page.getByText('CONTRATO-2026-v3',{exact:true}).count());const pdf=await page.request.get(BASE+'/condicoes/pdf');assert.equal(pdf.headers()['content-type'],'application/pdf');assert((await pdf.body()).subarray(0,4).toString()==='%PDF');
+ await page.goto(BASE+'/condicoes');assert(await page.getByText('ADELINHA-SERIE-2026-11-v1',{exact:true}).count());const pdf=await page.request.get(BASE+'/condicoes/pdf');assert.equal(pdf.headers()['content-type'],'application/pdf');assert((await pdf.body()).subarray(0,4).toString()==='%PDF');
  csrf=await page.locator('meta[name=csrf-token]').getAttribute('content');await page.request.post(BASE+'/cliente/sair',{form:{csrf_token:csrf}});
  await page.goto(BASE+'/');
  await page.evaluate(()=>sessionStorage.setItem('adelinha-registration-draft',JSON.stringify({name:'Rascunho anterior',terms_accept:true,terms_version:'CONTRATO-2026-v2',terms_digest:'old'})));

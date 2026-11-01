@@ -158,3 +158,43 @@ def test_google_oauth_schema_and_single_use_flow_on_postgresql(monkeypatch):
     assert response.location == '/cliente'
     with client.session_transaction() as session:
         assert session.get('client_id') and not session.get('staff')
+
+
+@pytest.mark.skipif(not os.environ.get('TEST_DATABASE_URL'), reason='TEST_DATABASE_URL não configurada')
+def test_regularization_append_only_records_and_email_proof_postgresql(monkeypatch):
+    import re
+    import app as application
+    from test_customization import csrf
+    from test_app import signature
+    from app import next_public_code
+    config={'TESTING':True,'SECRET_KEY':'pg-regularization','DATABASE':os.environ['TEST_DATABASE_URL']}
+    app=create_app(config);client=app.test_client();captured={}
+    monkeypatch.setattr(application,'send_code',lambda channel,email,code:(captured.update(code=code) or True,'test-only'))
+    connection=DatabaseConnection(config['DATABASE'])
+    source=connection.execute("SELECT * FROM clients WHERE email='cliente@example.com'").fetchone()
+    assert source
+    connection.execute('UPDATE clients SET confirmation_validated_at=NULL WHERE id=?',(source['id'],));connection.commit()
+    assert client.post('/cliente/login',data={'cpf':'cliente@example.com','password':'senha-segura','csrf_token':csrf(client)}).location=='/cliente'
+    def complete(new_signature=None):
+        page=client.get('/cliente/pendencias')
+        scope=re.search(r'name="scope" value="([a-f0-9]+)"',page.text).group(1)
+        assert client.post('/cliente/pendencias',data={'action':'send_code','scope':scope,'csrf_token':csrf(client)}).status_code==200
+        data={'action':'confirm','scope':scope,'terms_accept':'yes','code':captured['code'],'csrf_token':csrf(client)}
+        if new_signature:data['signature']=new_signature
+        result=client.post('/cliente/pendencias',data=data,follow_redirects=True)
+        assert result.status_code==200 and 'completo e válido' in result.text
+    complete()
+    assert connection.execute('SELECT count(*) n FROM client_contract_email_confirmations WHERE client_id=?',(source['id'],)).fetchone()['n']==1
+    assert connection.execute('SELECT confirmation_validated_at FROM clients WHERE id=?',(source['id'],)).fetchone()['confirmation_validated_at'] is None
+    # A separate incomplete client must explicitly sign a new, independent record.
+    values={k:v for k,v in source.items() if k!='id'}
+    values.update(public_id=next_public_code(connection,'CLIPCA'),cpf='98765432100',email='pg-missing@example.test',signature='')
+    columns=','.join(values);placeholders=','.join('?' for _ in values)
+    owner=connection.execute(f'INSERT INTO clients({columns}) VALUES({placeholders}) RETURNING id',tuple(values.values())).fetchone()['id'];connection.commit()
+    with client.session_transaction() as session:session.update(client_id=owner,client_session_version=values['session_version'])
+    complete(signature())
+    snapshots=connection.execute('SELECT source,signature FROM client_contract_records WHERE client_id=? ORDER BY id',(owner,)).fetchall()
+    assert len(snapshots)==2 and snapshots[0]['source']=='legacy' and snapshots[0]['signature']==''
+    assert snapshots[1]['source']=='acceptance' and snapshots[1]['signature']==signature()
+    assert connection.execute('SELECT signature FROM clients WHERE id=?',(owner,)).fetchone()['signature']==''
+    connection.close()

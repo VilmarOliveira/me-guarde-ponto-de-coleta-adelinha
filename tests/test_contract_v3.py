@@ -29,6 +29,7 @@ def test_v3_site_pdf_and_historical_snapshot_untouched(tmp_path,monkeypatch):
     with monkeypatch.context() as old:
         old.setattr(application,'TERMS_VERSION',OLD_VERSION)
         old.setattr(application,'CONTRACT_TEXT',OLD_TEXT)
+        old.setattr(application,'CONTRACT_LABEL',None)
         assert register(client).status_code==200
     with sqlite3.connect(database) as db:
         db.row_factory=sqlite3.Row

@@ -256,7 +256,9 @@ if (registrationForm) {
       'residential_district', 'residential_city', 'residential_state', 'residential_complement'].forEach((name) => {
       if (saved[name]) registrationForm.elements[name].value = saved[name];
     });
-    registrationForm.elements.terms_accept.checked = Boolean(saved.terms_accept);
+    registrationForm.elements.terms_accept.checked = Boolean(saved.terms_accept)
+      && saved.terms_version === registrationForm.elements.terms_version.value
+      && saved.terms_digest === registrationForm.elements.terms_digest.value;
     registrationForm.restoreSignature?.(saved.signature);
   } catch (_error) { /* armazenamento indisponível não impede o cadastro */ }
   registrationForm.querySelector('.terms-link')?.addEventListener('click', () => {
@@ -272,6 +274,8 @@ if (registrationForm) {
       residential_city: registrationForm.elements.residential_city.value,
       residential_state: registrationForm.elements.residential_state.value,
       residential_complement: registrationForm.elements.residential_complement.value,
+      terms_version: registrationForm.elements.terms_version.value,
+      terms_digest: registrationForm.elements.terms_digest.value,
       terms_accept: registrationForm.elements.terms_accept.checked,
       signature: registrationForm.querySelector('input[name="signature"]').value,
     }));

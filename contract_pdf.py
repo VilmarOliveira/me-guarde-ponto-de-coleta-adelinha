@@ -42,3 +42,21 @@ def build_contract_pdf(client):
         pdf.drawImage(ImageReader(BytesIO(base64.b64decode(signature.split(',',1)[1]))),45,y-95,width=260,height=90,preserveAspectRatio=True)
     else: line('Não registrado')
     pdf.save(); out.seek(0); return out
+
+
+def build_current_contract_pdf(text, version):
+    """Unsigned current version, separate from immutable signed snapshots."""
+    from html import escape
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+    from reportlab.lib.styles import ParagraphStyle
+    from branding import BRAND_VERSION
+    normal, bold = pdf_fonts(BRAND_VERSION)
+    output = BytesIO()
+    style = ParagraphStyle('contract', fontName=normal, fontSize=10, leading=15, spaceAfter=8)
+    heading = ParagraphStyle('heading', parent=style, fontName=bold, fontSize=12, leading=17)
+    story = [Paragraph(escape(version) + ' — contrato vigente, sem aceite', heading), Spacer(1, 10)]
+    for paragraph in text.split('\n\n'):
+        story.append(Paragraph(escape(paragraph).replace('\n', '<br/>'), style))
+    SimpleDocTemplate(output, pagesize=A4, rightMargin=45, leftMargin=45, topMargin=45, bottomMargin=45).build(story)
+    output.seek(0)
+    return output

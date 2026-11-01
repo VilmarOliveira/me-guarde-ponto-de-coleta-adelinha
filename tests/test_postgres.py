@@ -112,3 +112,49 @@ def test_explanatory_cards_persist_on_postgresql():
             assert thumbnail.mimetype == 'image/webp'
             with Image.open(io.BytesIO(thumbnail.data)) as decoded:
                 assert decoded.format == 'WEBP'
+
+
+@pytest.mark.skipif(not os.environ.get('TEST_DATABASE_URL'), reason='TEST_DATABASE_URL não configurada')
+def test_google_oauth_schema_and_single_use_flow_on_postgresql(monkeypatch):
+    from urllib.parse import parse_qs, urlsplit
+    from test_customization import csrf
+    config={'TESTING':True,'SECRET_KEY':'pg-oauth-fixture','DATABASE':os.environ['TEST_DATABASE_URL'],
+            'GOOGLE_LOGIN_ENABLED':'1','GOOGLE_LOGIN_CLIENT_ID':'pg-test-client','GOOGLE_LOGIN_CLIENT_SECRET':'fake-test-secret',
+            'GOOGLE_LOGIN_REDIRECT_URI':'https://pontodecoletaadl.servehttp.com/cliente/google/retorno'}
+    app=create_app(config)
+    client=app.test_client()
+    response=client.post('/cliente/google/iniciar',data={'csrf_token':csrf(client)})
+    assert response.status_code==302
+    state=parse_qs(urlsplit(response.location).query)['state'][0]
+    response=client.get('/cliente/google/retorno',query_string={'state':state,'error':'access_denied'},follow_redirects=True)
+    assert 'cancelada' in response.text
+    connection=DatabaseConnection(config['DATABASE'])
+    assert connection.execute('SELECT count(*) total FROM google_oauth_flows').fetchone()['total']==0
+    # Persist a fixture identity and pending link against an existing test client.
+    row=connection.execute('SELECT id FROM clients ORDER BY id LIMIT 1').fetchone()
+    assert row
+    connection.execute('INSERT INTO google_client_identities(google_sub,client_id,email_at_link,linked_at) VALUES(?,?,?,?)',('pg-test-subject',row['id'],'pg@example.test',1))
+    connection.execute('INSERT INTO google_login_pending(id_hash,google_sub,email,client_id,session_version,expires_at) VALUES(?,?,?,?,?,?)',('pg-ticket','pg-test-other','pg@example.test',row['id'],1,9999999999))
+    connection.commit();connection.close()
+    create_app(config)
+    connection=DatabaseConnection(config['DATABASE'])
+    assert connection.execute('SELECT client_id FROM google_client_identities WHERE google_sub=?',('pg-test-subject',)).fetchone()['client_id']==row['id']
+    assert connection.execute('DELETE FROM google_login_pending WHERE id_hash=? RETURNING google_sub',('pg-ticket',)).fetchone()['google_sub']=='pg-test-other'
+    connection.commit();connection.close()
+
+    # Exercise first-link/password confirmation with PostgreSQL transactions.
+    from test_app import register
+    import google_login
+    assert register(client).status_code == 200
+    connection=DatabaseConnection(config['DATABASE'])
+    connection.execute("UPDATE clients SET confirmation_channel='email',confirmation_destination=email,confirmation_validated_at=accepted_at WHERE email='cliente@example.com'")
+    connection.commit();connection.close()
+    monkeypatch.setattr(google_login, 'verified_identity', lambda *args: ('pg-linked-real-flow', 'cliente@example.com'))
+    response=client.post('/cliente/google/iniciar',data={'csrf_token':csrf(client)})
+    state=parse_qs(urlsplit(response.location).query)['state'][0]
+    response=client.get('/cliente/google/retorno',query_string={'state':state,'code':'test-only-code'})
+    assert response.location.endswith('/cliente/google/confirmar')
+    response=client.post('/cliente/google/confirmar',data={'password':'senha-segura','csrf_token':csrf(client)})
+    assert response.location == '/cliente'
+    with client.session_transaction() as session:
+        assert session.get('client_id') and not session.get('staff')

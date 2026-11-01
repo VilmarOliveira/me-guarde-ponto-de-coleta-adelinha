@@ -221,3 +221,8 @@
   .store-logo-tiktok-shop { background:#111; border-radius:10px; }
   .store-logo-renner, .store-logo-centauro { background:#e21c2a; border-radius:10px; }
 }
+@media screen {
+  .google-signin { display:flex; align-items:center; justify-content:center; gap:12px; background:#fff; color:#262626; border:1px solid #747775; font-weight:600; }
+  .google-signin svg { flex:none; }
+  .google-signin:hover { background:#f3f5f5; }
+}

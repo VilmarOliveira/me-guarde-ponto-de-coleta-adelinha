@@ -75,7 +75,7 @@ def _gmail_access_token():
         return None, "Não foi possível renovar a autorização do Gmail"
 
 
-def send_email(destination, subject, body):
+def send_email(destination, subject, body, *, html_body=None):
     """Envia pela Gmail API; sucesso significa aceitação pela API, não entrega."""
     sender = os.getenv("GMAIL_SENDER", GMAIL_SENDER).strip().lower()
     if sender != GMAIL_SENDER:
@@ -86,19 +86,24 @@ def send_email(destination, subject, body):
     mail = EmailMessage()
     mail["From"] = formataddr((GMAIL_DISPLAY_NAME, GMAIL_SENDER))
     mail["Reply-To"], mail["To"], mail["Subject"] = GMAIL_SENDER, destination, subject
-    mail.set_content(f"{body.rstrip()}\n\n{EMAIL_SIGNATURE}\n")
-    safe_body = escape(body.rstrip()).replace('\n', '<br>')
-    logo_markup = '<img src="cid:logo-adelinha" width="128" height="128" alt="Ponto de Coleta Adelinha" style="display:block;width:128px;height:128px;object-fit:contain;margin-bottom:20px">' if ORIGINAL_LOGO.is_file() else ''
-    mail.add_alternative(f"""<!doctype html><html lang="pt-BR"><body style="margin:0;background:#eafafa;color:{GRAPHITE};font-family:Montserrat,Arial,sans-serif">
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td align="center" style="padding:24px 12px">
-<table role="presentation" width="100%" style="max-width:600px;background:#ffffff;border-top:6px solid {ORANGE};border-radius:16px"><tr><td style="padding:32px">
-{logo_markup}<h1 style="font-size:22px;margin:0 0 8px;color:{GRAPHITE}">Ponto de Coleta Adelinha</h1>
-<p style="color:{DEFAULT_THEME['link']};font-weight:bold">ME GUARDE — COMPROU? DEIXA COM A GENTE.</p>
-<h2 style="font-size:18px;color:{GRAPHITE}">{escape(subject)}</h2><p style="line-height:1.7;overflow-wrap:anywhere">{safe_body}</p>
-<hr style="border:0;border-top:2px solid {TEAL}"><p style="font-size:12px;color:{GRAPHITE}">Unidade Amor Infinito · {escape(EMAIL_SIGNATURE)}</p>
-</td></tr></table></td></tr></table></body></html>""", subtype="html")
-    if ORIGINAL_LOGO.is_file():
-        mail.get_payload()[-1].add_related(ORIGINAL_LOGO.read_bytes(), maintype="image", subtype="png", cid="<logo-adelinha>")
+    if html_body is not None:
+        # Complete purpose-specific content: do not append the generic branding.
+        mail.set_content(body)
+        mail.add_alternative(html_body, subtype="html")
+    else:
+        mail.set_content(f"{body.rstrip()}\n\n{EMAIL_SIGNATURE}\n")
+        safe_body = escape(body.rstrip()).replace('\n', '<br>')
+        logo_markup = '<img src="cid:logo-adelinha" width="128" height="128" alt="Ponto de Coleta Adelinha" style="display:block;width:128px;height:128px;object-fit:contain;margin-bottom:20px">' if ORIGINAL_LOGO.is_file() else ''
+        mail.add_alternative(f"""<!doctype html><html lang="pt-BR"><body style="margin:0;background:#eafafa;color:{GRAPHITE};font-family:Montserrat,Arial,sans-serif">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td align="center" style="padding:24px 12px">
+    <table role="presentation" width="100%" style="max-width:600px;background:#ffffff;border-top:6px solid {ORANGE};border-radius:16px"><tr><td style="padding:32px">
+    {logo_markup}<h1 style="font-size:22px;margin:0 0 8px;color:{GRAPHITE}">Ponto de Coleta Adelinha</h1>
+    <p style="color:{DEFAULT_THEME['link']};font-weight:bold">ME GUARDE — COMPROU? DEIXA COM A GENTE.</p>
+    <h2 style="font-size:18px;color:{GRAPHITE}">{escape(subject)}</h2><p style="line-height:1.7;overflow-wrap:anywhere">{safe_body}</p>
+    <hr style="border:0;border-top:2px solid {TEAL}"><p style="font-size:12px;color:{GRAPHITE}">Unidade Amor Infinito · {escape(EMAIL_SIGNATURE)}</p>
+    </td></tr></table></td></tr></table></body></html>""", subtype="html")
+        if ORIGINAL_LOGO.is_file():
+            mail.get_payload()[-1].add_related(ORIGINAL_LOGO.read_bytes(), maintype="image", subtype="png", cid="<logo-adelinha>")
     raw = base64.urlsafe_b64encode(mail.as_bytes()).decode("ascii")
     request = Request("https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
         data=json.dumps({"raw": raw}).encode("utf-8"),
@@ -152,10 +157,28 @@ def _send_whatsapp(destination, code):
         return False, _provider_error(error)
 
 
+def confirmation_email(code):
+    """Exact confirmation copy in both alternatives, retaining leading zeroes."""
+    subject = "Código de confirmação — Ponto de Coleta Adelinha"
+    body = (f"Ponto de Coleta Adelinha\n\nCódigo de confirmação: {code}\n\n"
+            "Ele expira em 10 minutos.\n\nPONTO DE COLETA ADELINHA\n"
+            "ME GUARDE — COMPROU? DEIXA COM A GENTE.\n")
+    html_body = f"""<!doctype html><html lang="pt-BR"><head><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;background:#ffffff;color:{GRAPHITE};font-family:Arial,sans-serif">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td align="center" style="padding:20px 12px">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:520px"><tr><td style="padding:12px;line-height:1.6;overflow-wrap:anywhere">
+<p style="font-size:22px;margin:0 0 24px"><strong>Ponto de Coleta Adelinha</strong></p>
+<p style="font-size:18px;margin:0 0 20px">Código de confirmação: <strong style="font-size:28px;white-space:nowrap">{escape(str(code))}</strong></p>
+<p style="font-size:16px;margin:0 0 28px">Ele expira em <strong>10 minutos</strong>.</p>
+<p style="font-size:14px;margin:0"><strong>PONTO DE COLETA ADELINHA<br>ME GUARDE — COMPROU? DEIXA COM A GENTE.</strong></p>
+</td></tr></table></td></tr></table></body></html>"""
+    return subject, body, html_body
+
+
 def send_code(channel, destination, code):
-    message = f"Seu código de confirmação do Ponto de Coleta Adelinha é {code}. Ele expira em 10 minutos."
     if channel == "email":
-        return send_email(destination, "Código de confirmação", message)
+        subject, body, html_body = confirmation_email(code)
+        return send_email(destination, subject, body, html_body=html_body)
     if channel == "whatsapp":
         return _send_whatsapp(destination, code)
     return False, "Canal inválido"

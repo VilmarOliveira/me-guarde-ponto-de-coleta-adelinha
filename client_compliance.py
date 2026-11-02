@@ -10,7 +10,13 @@ from core import valid_cpf
 
 FIELDS = ('public_id','name','cpf','terms_version','terms_text','signature','accepted_at','contract_id','contract_hash',
           'contract_public_id','document_brand_version','document_logo_present','confirmation_channel',
-          'confirmation_destination','confirmation_validated_at','accept_ip','accept_user_agent','terms_display_label')
+          'confirmation_destination','confirmation_validated_at','accept_ip','accept_user_agent','terms_display_label','contract_revision_id')
+
+
+def revision_id(version,text):
+    """Document identity, separate from visual labels and individual acceptance IDs."""
+    payload=json.dumps([version,text],ensure_ascii=False,separators=(',',':'))
+    return 'REV-'+hashlib.sha256(payload.encode()).hexdigest()
 
 
 def signature_data(value):
@@ -55,9 +61,27 @@ def records(db,client):
     return [dict(r) for r in db.execute('SELECT * FROM client_contract_records WHERE client_id=? ORDER BY id DESC',(client['id'],)).fetchall()]
 
 
+def notice_record_ids(db,client_id):
+    # Older installations may have acceptance history predating the center.
+    available=getattr(db,'action_history_available',None)
+    if available is None:
+        if db.postgres:
+            available=db.execute("SELECT to_regclass('client_action_responses') IS NOT NULL AND to_regclass('client_action_requests') IS NOT NULL AS available").fetchone()['available']
+        else:
+            available=db.execute("SELECT COUNT(*) n FROM sqlite_master WHERE type='table' AND name IN ('client_action_responses','client_action_requests')").fetchone()['n']==2
+        db.action_history_available=available
+    if not available:return set()
+    return {r['contract_record_id'] for r in db.execute('''SELECT a.contract_record_id
+        FROM client_action_responses a JOIN client_action_requests q ON q.id=a.request_id
+        WHERE a.client_id=? AND a.contract_record_id IS NOT NULL AND q.is_contract=1
+        AND q.require_existing=0''',(client_id,)).fetchall()}
+
+
 def effective_record(db,client):
     rows=records(db,client)
-    return next((r for r in rows if r['source']=='acceptance'),None) or next((r for r in rows if r['source']=='legacy'),None) or snapshot(client)
+    # Preserve old notice attachments, but never treat reading as signing.
+    rejected=notice_record_ids(db,client['id']) if any(r['source']=='acceptance' for r in rows) else set()
+    return next((r for r in rows if r['source']=='acceptance' and r['id'] not in rejected),None) or next((r for r in rows if r['source']=='legacy'),None) or snapshot(client)
 
 
 def archive_legacy(db,client,stamp):

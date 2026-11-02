@@ -234,3 +234,6 @@
   .privacy-document p, .privacy-document li { line-height:1.75; }
   .privacy-document code { white-space:normal; overflow-wrap:anywhere; }
 }
+
+/* Immutable revision identifiers must fit even at 320 px. */
+.contract-revision { overflow-wrap: anywhere; word-break: break-word; }

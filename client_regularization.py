@@ -5,7 +5,7 @@ import secrets
 from flask import Blueprint, abort, flash, redirect, render_template, request, session, url_for
 from werkzeug.security import generate_password_hash
 from client_compliance import (FIELDS, compliance, archive_legacy, acceptance_key, records,
-                               signature_data, valid_email)
+                               signature_data, valid_email, revision_id)
 from core import valid_cpf
 from email_challenges import issue as issue_email, verify as verify_email
 
@@ -86,7 +86,7 @@ def install_regularization(app,db,login_required,now,send_code,address_form,addr
         if needs_accept:
             values={key:None for key in FIELDS}
             values.update(public_id=fresh['public_id'],contract_public_id=fresh['public_id'],name=fresh['name'],cpf=fresh['cpf'],
-                terms_version=contract['terms_version'],terms_text=contract['terms_text'],terms_display_label=contract.get('terms_display_label'),
+                terms_version=contract['terms_version'],terms_text=contract['terms_text'],terms_display_label=contract.get('terms_display_label'),contract_revision_id=revision_id(contract['terms_version'],contract['terms_text']),
                 signature=signature,accepted_at=stamp,confirmation_channel='email',confirmation_destination=fresh['email'],
                 confirmation_validated_at=stamp,document_brand_version=app.config['CURRENT_DOCUMENT_BRAND'],document_logo_present=app.config['CURRENT_DOCUMENT_LOGO'],
                 accept_ip=request.remote_addr,accept_user_agent=request.headers.get('User-Agent','')[:500])

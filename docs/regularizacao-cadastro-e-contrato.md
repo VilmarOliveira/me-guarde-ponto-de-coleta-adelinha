@@ -8,7 +8,7 @@ A base local disponível está vazia; a conta relatada e o banco Oracle não for
 
 Agora o mesmo diagnóstico é usado no Google e na Área do Cliente. Identificador/hash de controle ausentes, isoladamente, não invalidam um aceite histórico que tenha versão, texto, data, identificação do titular e assinatura reais. Não são gerados valores substitutos para esses campos. Assinaturas PNG, JPEG e WebP e base64 puro são reconhecidos **somente após decodificar e validar o arquivo real**. Arquivos ilegíveis, dados arbitrários e SVG não são tratados como assinatura válida; o original permanece preservado. A normalização é apenas para leitura/exibição, sem regravar a evidência.
 
-A confirmação por e-mail continua obrigatória para o Google: evidência histórica com canal `email`, destinatário válido e data válida, ou confirmação adicional efetivamente realizada pelo cliente, vinculada ao fingerprint do aceite. A indicação técnica de que um e-mail foi enviado não é confundida com confirmação. Dados de contato/endereço são validados, e conta inativa continua bloqueada.
+A confirmação por e-mail continua obrigatória para regularizar as evidências contratuais. Desde a central de pendências, sua ausência não impede autenticar um cliente ativo pelo Google; ele pode regularizar no sistema, com as funções dependentes restritas. Evidências válidas: evidência histórica com canal `email`, destinatário válido e data válida, ou confirmação adicional efetivamente realizada pelo cliente, vinculada ao fingerprint do aceite. A indicação técnica de que um e-mail foi enviado não é confundida com confirmação. Dados de contato/endereço são validados, e conta inativa continua bloqueada.
 
 ## Fluxo do cliente
 
@@ -18,7 +18,7 @@ A confirmação por e-mail continua obrigatória para o Google: evidência hist�
 4. Se faltarem assinatura, identificação do titular, texto, versão ou data do aceite, leia o contrato da nova série, desenhe sua assinatura, solicite o código e confirme o aceite. É criado **um novo registro**, mantendo o anterior intacto.
 5. Depois de regularizar, saia e escolha **Continuar com o Google**. O primeiro vínculo continua exigindo a senha do cadastro existente; vínculos já registrados continuam usando o `sub` do Google. Não há criação automática de conta.
 
-Os detalhes das pendências só aparecem após autenticação do cliente. O retorno Google de um cadastro incompleto orienta genericamente a entrar por senha e consultar a própria Área do Cliente. IDs em parâmetros de consulta não selecionam outra conta. O histórico e os PDFs verificam o proprietário no servidor.
+Os detalhes das pendências só aparecem após autenticação do cliente. O retorno Google autentica clientes ativos, inclusive com pendências, e permite consultar a própria central de regularização. O primeiro vínculo mantém a confirmação da senha existente; contas inativas não entram. IDs em parâmetros de consulta não selecionam outra conta. O histórico e os PDFs verificam o proprietário no servidor.
 
 O envio do código usa a Gmail API já configurada. Nenhuma credencial Google/Gmail foi alterada. Os códigos ficam em tabela própria no servidor, expiram em 10 minutos, têm limite de cinco tentativas e de três envios em 15 minutos, com intervalo de 60 segundos. Ficam vinculados ao cliente, e-mail, dados identificadores e ao texto/versão apresentados. Alterar esses dados invalida o uso do código anterior. Falha de envio não confirma nada. Solicitar/reenviar um código não apaga a assinatura que está sendo desenhada.
 

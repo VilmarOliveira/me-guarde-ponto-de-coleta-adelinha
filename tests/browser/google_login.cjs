@@ -15,16 +15,17 @@ try{
    const csrf=await page.locator('meta[name=csrf-token]').getAttribute('content');
    await page.request.post(BASE+'/__google/reset-link',{form:{csrf_token:csrf}});
   }
-  await page.getByRole('button',{name:'Continuar com o Google'}).click();await page.getByRole('link',{name:'Voltar ao site'}).click();
-  if(scenario==='active'){
+  await page.getByRole('button',{name:'Fazer Login com o Google'}).click();await page.getByRole('link',{name:'Voltar ao site'}).click();
+  if(scenario==='active'||scenario==='incomplete'){
    await page.getByRole('heading',{name:'Confirmar vínculo com o Google'}).waitFor();
    assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
    await page.locator('[name=password]').fill('senha-segura');await page.getByRole('button',{name:'Confirmar e entrar'}).click();await page.waitForURL('**/cliente');
    assert.equal(await page.locator('.google-signin').count(),0);
+   if(scenario==='incomplete'){assert.equal((await page.request.get(BASE+'/cliente/dados-de-entrega')).status(),403);assert.equal((await page.request.get(BASE+'/cliente/pendencias')).status(),200);}
    await page.goto(BASE+'/painel');assert.equal(new URL(page.url()).pathname,'/login');
    const csrf=await page.locator('meta[name=csrf-token]').getAttribute('content');
    await page.request.post(BASE+'/cliente/sair',{form:{csrf_token:csrf}});await page.goto(BASE+'/cliente/login');
-   await page.getByRole('button',{name:'Continuar com o Google'}).click();await page.getByRole('link',{name:'Voltar ao site'}).click();await page.waitForURL('**/cliente');
+   await page.getByRole('button',{name:'Fazer Login com o Google'}).click();await page.getByRole('link',{name:'Voltar ao site'}).click();await page.waitForURL('**/cliente');
   } else if(scenario==='new'){
    await page.waitForURL('**/#cadastro');
    const notice=page.locator('#cadastro [role=alert]');assert((await notice.textContent()).includes('Para entrar com o Google, primeiro faça seu cadastro no site. Utilize o mesmo e-mail da sua conta Google.'));

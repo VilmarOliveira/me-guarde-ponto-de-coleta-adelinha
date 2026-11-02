@@ -1,15 +1,13 @@
 """Client-owned regularization, verified email codes and append-only evidence."""
 import hashlib
-import hmac
 import json
-import re
 import secrets
-import time
 from flask import Blueprint, abort, flash, redirect, render_template, request, session, url_for
 from werkzeug.security import generate_password_hash
 from client_compliance import (FIELDS, compliance, archive_legacy, acceptance_key, records,
                                signature_data, valid_email)
 from core import valid_cpf
+from email_challenges import issue as issue_email, verify as verify_email
 
 
 def install_regularization(app,db,login_required,now,send_code,address_form,address_valid,current_contract):
@@ -24,8 +22,6 @@ def install_regularization(app,db,login_required,now,send_code,address_form,addr
             'action':'accept' if needs_accept else 'confirm','key':acceptance_key(record) if not needs_accept else None,
             'version':contract['terms_version'],'text':contract['terms_text']},sort_keys=True,ensure_ascii=False).encode()).hexdigest()
         return record,missing,needs_accept,contract,scope
-    def code_hash(owner,scope,code):
-        return hmac.new(app.secret_key.encode(),f"{owner['id']}:{scope}:{code}".encode(),hashlib.sha256).hexdigest()
     def show(owner,status=200):
         record,missing,needs_accept,contract,scope=state(owner)
         return render_template('client_pending.html',client=owner,missing=missing,needs_accept=needs_accept,
@@ -58,6 +54,7 @@ def install_regularization(app,db,login_required,now,send_code,address_form,addr
                 residential_number=?,residential_district=?,residential_city=?,residential_state=?,residential_complement=? WHERE id=?''',
                 (name,cpf,phone,email,password,''.join(c for c in address['residential_cep'] if c.isdigit()),address['residential_street'],address['residential_number'],
                  address['residential_district'],address['residential_city'],address['residential_state'].upper(),address['residential_complement'] or None,owner['id']))
+            db().execute('INSERT INTO audit_logs(actor,action,entity_type,entity_id,details,created_at) VALUES(?,?,?,?,?,?)',(f"cliente:{owner['id']}",'editar_proprio_cadastro','cliente',owner['id'],'Dados salvos pelo próprio cliente',now().isoformat()))
             db().execute('DELETE FROM client_regularization_codes WHERE client_id=?',(owner['id'],));db().commit()
             flash('Dados atualizados. Confira as pendências restantes abaixo.','success');return redirect(url_for('regularization.pending'))
         record,missing,needs_accept,contract,scope=state(owner)
@@ -68,29 +65,9 @@ def install_regularization(app,db,login_required,now,send_code,address_form,addr
         if request.form.get('scope')!=scope:
             flash('Os dados ou o contrato mudaram. Recarregue e solicite um novo código.','error');return show(owner,409)
         if action=='send_code':
-            stamp=int(time.time())
-            previous=db().execute('SELECT * FROM client_regularization_codes WHERE client_id=?',(owner['id'],)).fetchone()
-            if previous and stamp-previous['sent_at']<60:
-                flash('Aguarde 60 segundos antes de reenviar o código.','error');return show(owner,429)
-            sends=previous['sends'] if previous and stamp-previous['window_start']<900 else 0
-            if sends>=3:
-                flash('Limite de envios atingido. Aguarde 15 minutos.','error');return show(owner,429)
-            # Reserve the rate-limit slot before calling the email provider.
-            code=f'{secrets.randbelow(1000000):06d}'
-            window=previous['window_start'] if sends else stamp
-            reserved=db().execute('''INSERT INTO client_regularization_codes(client_id,scope_hash,code_hash,expires_at,attempts,sent_at,sends,window_start)
-                VALUES(?,?,?,?,0,?,?,?) ON CONFLICT(client_id) DO UPDATE SET scope_hash=excluded.scope_hash,code_hash=excluded.code_hash,
-                expires_at=excluded.expires_at,attempts=0,sent_at=excluded.sent_at,sends=excluded.sends,window_start=excluded.window_start
-                WHERE client_regularization_codes.sent_at<=? AND (client_regularization_codes.sends<3 OR client_regularization_codes.window_start<=?) RETURNING client_id''',
-                (owner['id'],scope,code_hash(owner,scope,code),stamp+600,stamp,sends+1,window,stamp-60,stamp-900)).fetchone();db().commit()
-            if not reserved:
-                flash('Aguarde antes de solicitar outro código.','error');return show(owner,429)
-            try:sent,_=send_code('email',owner['email'],code)
-            except Exception:sent=False
-            if not sent:
-                db().execute('UPDATE client_regularization_codes SET expires_at=0 WHERE client_id=?',(owner['id'],));db().commit()
-                flash('Envio de e-mail indisponível. Nenhum aceite ou confirmação foi registrado. Tente novamente mais tarde.','error');return show(owner,503)
-            flash('Código enviado ao seu e-mail. Ele expira em 10 minutos.','success');return show(owner)
+            status,message=issue_email(db(),app.secret_key,owner,scope,send_code)
+            flash(message,'success' if status==200 else 'error')
+            return show(owner,status)
         if action!='confirm':abort(400)
         if request.form.get('terms_accept')!='yes':
             flash('Confirme que leu o contrato apresentado.','error');return show(owner,400)
@@ -101,10 +78,7 @@ def install_regularization(app,db,login_required,now,send_code,address_form,addr
         db().begin_write()
         fresh=db().execute('SELECT * FROM clients WHERE id=?'+(' FOR UPDATE' if db().postgres else ''),(owner['id'],)).fetchone()
         new_record,new_missing,new_accept,new_contract,new_scope=state(fresh)
-        proof=db().execute('''UPDATE client_regularization_codes SET attempts=attempts+1 WHERE client_id=? AND scope_hash=?
-            AND expires_at>? AND attempts<5 RETURNING *''',(owner['id'],scope,int(time.time()))).fetchone()
-        supplied=request.form.get('code','')
-        valid=proof and bool(re.fullmatch('[0-9]{6}',supplied)) and secrets.compare_digest(proof['code_hash'],code_hash(owner,scope,supplied))
+        valid=verify_email(db(),app.secret_key,owner,scope,request.form.get('code',''))
         if not valid or new_scope!=scope or new_accept!=needs_accept or any(x['group']=='profile' for x in new_missing):
             db().commit();flash('Código inválido ou expirado, ou cadastro alterado. Confira e solicite outro código quando necessário.','error');return show(fresh,400)
         stamp=now().isoformat()

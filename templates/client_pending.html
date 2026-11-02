@@ -1,4 +1,4 @@
-{% extends 'base.html' %}{% block title %}Pendências do cadastro · Área do Cliente{% endblock %}{% block content %}
+{% extends 'base.html' %}{% from 'signature_input.html' import signature_input %}{% block title %}Pendências do cadastro · Área do Cliente{% endblock %}{% block content %}
 <section class="panel-card"><span class="eyebrow">ÁREA DO CLIENTE</span><h1>Pendências do cadastro</h1><p>Seu ID continua sendo <b>{{ client.public_id }}</b>. A regularização mantém seus pacotes e o histórico de contratos.</p>
 {% if missing %}<ul>{% for item in missing %}<li>{{ item.label }}</li>{% endfor %}</ul>{% else %}<div class="notice">Seu cadastro está completo e válido para entrar com o Google. No primeiro vínculo, confirme também a senha do cadastro.</div>{% endif %}
 <a class="button ghost" href="{{ url_for('client_area') }}">Voltar à Área do Cliente</a><a class="button ghost" href="{{ url_for('regularization.history') }}">Histórico de contratos</a></section>
@@ -15,6 +15,6 @@
 {% if not needs_accept and signature_preview %}<img class="saved-signature" src="{{ signature_preview }}" alt="Assinatura histórica preservada">{% endif %}
 <form method="post" data-regularization-email><input type="hidden" name="action" value="send_code"><input type="hidden" name="scope" value="{{ scope }}"><p>O código será enviado ao e-mail do seu cadastro: {{ client.email }}.</p><button class="button ghost">Enviar código por e-mail</button><p data-email-status role="status" aria-live="polite"></p></form>
 <form method="post" {% if needs_accept %}data-signature-form{% endif %}><input type="hidden" name="action" value="confirm"><input type="hidden" name="scope" value="{{ scope }}">
-{% if needs_accept %}<label>Assine abaixo</label><canvas class="signature" width="700" height="300" aria-label="Área de assinatura do contrato"></canvas><input type="hidden" name="signature"><button type="button" class="button ghost clear-signature">Limpar assinatura</button>{% endif %}
+{% if needs_accept %}{{ signature_input() }}{% endif %}
 <label><input type="checkbox" name="terms_accept" value="yes" required> Li o contrato apresentado e confirmo seu aceite.</label><label>Código recebido por e-mail<input name="code" required inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6"></label><button class="button primary">{{ 'Assinar e concluir regularização' if needs_accept else 'Confirmar e concluir regularização' }}</button></form></section>{% endif %}
 {% endblock %}

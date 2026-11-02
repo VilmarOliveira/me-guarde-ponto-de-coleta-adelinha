@@ -34,6 +34,7 @@ from contract import CONTRACT_TEXT, CONTRACT_VERSION, CONTRACT_LABEL
 from privacy_policy import PRIVACY_UPDATED, PRIVACY_CONTACT as PRIVACY_EMAIL, PRIVACY_REVIEW_PENDING
 from client_compliance import FIELDS as CONTRACT_FIELDS, compliance, effective_record, signature_data
 from client_regularization import install_regularization
+import client_actions
 from contract_pdf import build_contract_pdf, build_current_contract_pdf
 from google_login import install_google_login
 
@@ -167,6 +168,9 @@ def create_app(test_config=None):
     if test_config:
         app.config.update(test_config)
 
+    def current_contract():
+        return client_actions.current_contract(db(),(TERMS_VERSION,CONTRACT_LABEL,terms_text()))
+
     @app.template_filter("package_arrival_message")
     def package_arrival_message_filter(package):
         return package_arrival_message(
@@ -295,11 +299,12 @@ def create_app(test_config=None):
         theme = db().execute("SELECT colors FROM site_themes WHERE id=?", (setting["active_theme_id"],)).fetchone() if setting and setting["active_theme_id"] else None
         try: theme_colors = json.loads(theme["colors"]) if theme else {}
         except (TypeError, json.JSONDecodeError): theme_colors = {}
+        contract_version,contract_label,contract_text=current_contract()
         return {"csrf_token": session.get("csrf_token"), "address": PICKUP_ADDRESS,
                 "pickup_address": PICKUP_ADDRESS, "pix_receiver_name_full": db().execute("SELECT pix_receiver_name,pix_key,pix_key_type FROM settings WHERE id=1").fetchone()["pix_receiver_name"],
                 "logged_name": staff["name"] if staff else (app.config["STAFF_NAME"] if session.get("staff") else client_name),
                 "pickup_cep": PICKUP_CEP, "theme_colors": theme_colors, "theme_variables": theme_variables(theme_colors),
-                "current_contract_label": CONTRACT_LABEL, "current_terms_version": TERMS_VERSION, "current_terms_digest": hashlib.sha256(terms_text().encode()).hexdigest(),
+                "current_contract_label": contract_label, "current_terms_version": contract_version, "current_terms_digest": hashlib.sha256(contract_text.encode()).hexdigest(),
                 "image_upload_max_bytes": IMAGE_UPLOAD_MAX_BYTES, "store_logos": STORE_LOGOS,
                 "explanatory_cards": db().execute("SELECT id,title,alt_text,revision,width,height FROM explanatory_cards ORDER BY id").fetchall(),
                 "original_logo_available": ORIGINAL_LOGO.is_file(), "header_customized": bool(setting and setting["header_customized"]), "staff_account": staff,
@@ -936,17 +941,19 @@ def create_app(test_config=None):
         db().execute("SELECT 1").fetchone()
         return {"status": "ok"}
 
-    def presented_contract_matches():
+    def presented_contract_matches(contract=None):
+        current_version, _, current_text = contract or current_contract()
         version = request.form.get('terms_version')
         digest = request.form.get('terms_digest')
         # Compatibility for existing isolated fixtures, never for production.
         if app.config.get('TESTING') and version is None and digest is None:
             return True
-        return version == TERMS_VERSION and digest == hashlib.sha256(terms_text().encode()).hexdigest()
+        return version == current_version and digest == hashlib.sha256(current_text.encode()).hexdigest()
 
     @app.post("/cadastro")
     def register():
-        if not presented_contract_matches():
+        version,label,text = current_contract()
+        if not presented_contract_matches((version,label,text)):
             flash('O contrato foi atualizado. Leia a versão vigente e solicite um novo código antes de aceitar.', 'error')
             return render_template('index.html', registration_form={**request.form}), 409
         name = request.form.get("name", "").strip()
@@ -958,8 +965,8 @@ def create_app(test_config=None):
         residential = residential_address_form()
         confirmation = session.get("registration_confirmation")
         submitted_code = request.form.get("confirmation_code", "")
-        confirmed = bool(confirmation and confirmation.get("cpf") == cpf and confirmation.get("email") == email and confirmation.get("version") == TERMS_VERSION
-            and confirmation.get("text_digest") == hashlib.sha256(terms_text().encode()).hexdigest()
+        confirmed = bool(confirmation and confirmation.get("cpf") == cpf and confirmation.get("email") == email and confirmation.get("version") == version
+            and confirmation.get("text_digest") == hashlib.sha256(text.encode()).hexdigest()
             and confirmation.get("attempts", 0) < 5
             and datetime.fromisoformat(confirmation["expires_at"]) > now()
             and secrets.compare_digest(confirmation["code_hash"], hashlib.sha256(submitted_code.encode()).hexdigest()))
@@ -988,25 +995,26 @@ def create_app(test_config=None):
             """INSERT INTO clients(public_id,name, cpf, phone, terms_version, terms_text, signature, accepted_at, password_hash,
                residential_cep,residential_street,residential_number,residential_district,residential_city,residential_state,residential_complement,email)
                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) RETURNING id""",
-            (public_id,name, cpf, phone, TERMS_VERSION, terms_text(), signature, accepted_at, generate_password_hash(password),
+            (public_id,name, cpf, phone, version, text, signature, accepted_at, generate_password_hash(password),
              digits(residential["residential_cep"]), residential["residential_street"], residential["residential_number"],
              residential["residential_district"], residential["residential_city"], residential["residential_state"].upper(),
              residential["residential_complement"] or None, email or None),
         )
         client_id = cur.fetchone()["id"]
-        integrity = hashlib.sha256((public_id + name + cpf + terms_text() + signature + accepted_at).encode()).hexdigest()
+        integrity = hashlib.sha256((public_id + name + cpf + text + signature + accepted_at).encode()).hexdigest()
         db().execute("UPDATE clients SET contract_id=?,contract_hash=?,contract_public_id=?,document_brand_version=?,document_logo_present=?,confirmation_channel=?,confirmation_destination=?,confirmation_validated_at=?,accept_ip=?,accept_user_agent=?,terms_display_label=? WHERE id=?",
             (f"CTRPCA-{client_id}", integrity, public_id, BRAND_VERSION, int(ORIGINAL_LOGO.is_file()), confirmation.get("channel") if confirmation else "teste",
              confirmation.get("destination") if confirmation else None, accepted_at,
-             request.headers.get("X-Forwarded-For", request.remote_addr), request.headers.get("User-Agent", "")[:500], CONTRACT_LABEL, client_id))
+             request.headers.get("X-Forwarded-For", request.remote_addr), request.headers.get("User-Agent", "")[:500], label, client_id))
         db().commit()
         session.pop("registration_confirmation", None)
         session.pop("google_registration_required", None)
-        return render_template("success.html", name=name, public_id=public_id, address=ADDRESS, contract_label=CONTRACT_LABEL, contract_version=TERMS_VERSION)
+        return render_template("success.html", name=name, public_id=public_id, address=ADDRESS, contract_label=label, contract_version=version)
 
     @app.post("/cadastro/enviar-codigo")
     def registration_code():
-        if not presented_contract_matches():
+        version,label,text = current_contract()
+        if not presented_contract_matches((version,label,text)):
             return {'error': 'O contrato foi atualizado. Recarregue, leia a versão vigente e tente novamente.'}, 409
         cpf, channel = digits(request.form.get("cpf", "")), "email"
         if request.form.get("confirmation_channel") not in (None,"","email"):
@@ -1025,7 +1033,7 @@ def create_app(test_config=None):
         try: sent, detail = send_code(channel, destination, code)
         except Exception: sent, detail = False, "Falha no provedor"
         if not sent: return {"error": f"Envio indisponível: {detail}."}, 503
-        session["registration_confirmation"] = {"cpf":cpf,"email":destination,"version":TERMS_VERSION,"text_digest":hashlib.sha256(terms_text().encode()).hexdigest(),"channel":channel,
+        session["registration_confirmation"] = {"cpf":cpf,"email":destination,"version":version,"text_digest":hashlib.sha256(text.encode()).hexdigest(),"channel":channel,
             "destination":destination,"code_hash":hashlib.sha256(code.encode()).hexdigest(),
             "expires_at":(now()+timedelta(minutes=10)).isoformat(),"sent_at":now().isoformat(),"attempts":0,"sends":previous.get("sends",0)+1}
         return {"message":"Código enviado. Ele expira em 10 minutos."}
@@ -1042,12 +1050,14 @@ def create_app(test_config=None):
         back = request.args.get("next", "")
         if not back.startswith("/") or back.startswith("//"):
             back = url_for("index")
-        return render_template("terms.html", version=TERMS_VERSION, exact_text=terms_text(), back=back, contract_label=CONTRACT_LABEL)
+        version,label,text=current_contract()
+        return render_template("terms.html", version=version, exact_text=text, back=back, contract_label=label)
 
     @app.get('/condicoes/pdf')
     def current_contract_pdf():
-        return send_file(build_current_contract_pdf(terms_text(), TERMS_VERSION, CONTRACT_LABEL), mimetype='application/pdf',
-                         as_attachment=True, download_name=f'contrato-{TERMS_VERSION}.pdf')
+        version,label,text=current_contract()
+        return send_file(build_current_contract_pdf(text, version, label), mimetype='application/pdf',
+                         as_attachment=True, download_name=f'contrato-{version}.pdf')
 
     @app.get("/login")
     def login():
@@ -1196,7 +1206,7 @@ def create_app(test_config=None):
     @client_login_required
     def client_area():
         client = db().execute("SELECT * FROM clients WHERE id=?", (session["client_id"],)).fetchone()
-        _, pending_items = compliance(db(), client)
+        accepted_record, pending_items = compliance(db(), client)
         page, page_size, offset = pagination()
         package_rows = db().execute(f"SELECT {PACKAGE_COLUMNS} FROM packages WHERE client_id=? ORDER BY created_at DESC LIMIT ? OFFSET ?", (client["id"], page_size + 1, offset)).fetchall()
         has_next = len(package_rows) > page_size
@@ -1210,7 +1220,7 @@ def create_app(test_config=None):
                     day = (now().date() - datetime.fromisoformat(package["notified_at"]).astimezone(TZ).date()).days + 1
                     item["deadline_alert"] = "ending" if day in (3, 4) else ("late" if day >= 5 else None)
                 pending.append(item)
-        return render_template("client_area.html", client=client, pending=pending, packages=packages, page=page, has_next=has_next, pending_items=pending_items)
+        return render_template("client_area.html", client=client, pending=pending, packages=packages, page=page, has_next=has_next, pending_items=pending_items, accepted_record=accepted_record, accepted_signature=signature_data(accepted_record.get("signature")))
 
     @app.route("/cliente/editar", methods=["GET", "POST"])
     @client_login_required
@@ -1378,7 +1388,7 @@ def create_app(test_config=None):
         linked = db().execute("SELECT COUNT(*) AS total FROM packages WHERE client_id=?", (client_id,)).fetchone()["total"]
         if pending:
             flash("Não é possível excluir ou desativar enquanto houver pacotes pendentes.", "error")
-        elif linked or client["signature"] or client["terms_version"] or db().execute("SELECT 1 FROM client_contract_records WHERE client_id=?", (client_id,)).fetchone():
+        elif linked or client["signature"] or client["terms_version"] or db().execute("SELECT 1 FROM client_contract_records WHERE client_id=?", (client_id,)).fetchone() or db().execute("SELECT 1 FROM client_action_assignments WHERE client_id=?", (client_id,)).fetchone():
             db().execute("UPDATE clients SET active=0,session_version=session_version+1 WHERE id=?", (client_id,))
             audit("desativar", "cliente", client_id, "histórico preservado")
             db().commit()
@@ -1578,6 +1588,11 @@ def create_app(test_config=None):
                 message = "Pacote recusado: Limite de 150 cm na soma e 20 kg."
             flash(message, "error")
             return redirect(url_for("dashboard") + "#novo-pacote")
+        package_owner=db().execute('SELECT * FROM clients WHERE id=?',(selected_client['id'],)).fetchone()
+        requirements=client_actions.blockers(db(),package_owner,now().isoformat())['new_packages']
+        if requirements:
+            flash('Novas encomendas dependem de regularização: '+ '; '.join(requirements)+'. A retirada de pacotes já recebidos permanece disponível.','error')
+            return redirect(url_for('dashboard')+'#novo-pacote')
         width, height, length, weight = numbers
         try:
             cur = db().execute("""INSERT INTO packages(client_id, tracking, width, height, length, weight, shelf, category, base_price, status, created_at)
@@ -1835,7 +1850,23 @@ def create_app(test_config=None):
     with app.app_context():
         init_db(app.config["DATABASE"])
     install_google_login(app, db, login_blocked, record_login)
-    install_regularization(app, db, client_login_required, now, lambda *args: send_code(*args), residential_address_form, valid_residential_address, lambda: (TERMS_VERSION, CONTRACT_LABEL, terms_text()))
+    install_regularization(app, db, client_login_required, now, lambda *args: send_code(*args), residential_address_form, valid_residential_address, current_contract)
+    client_actions.install(app, db, client_login_required, admin_required, current_staff, now, lambda *args: send_code(*args), lambda: (TERMS_VERSION,CONTRACT_LABEL,terms_text()))
+    @app.context_processor
+    def action_context():
+        if not session.get('client_id'):return {}
+        person=db().execute('SELECT * FROM clients WHERE id=?',(session['client_id'],)).fetchone()
+        if not person or not person['active'] or person['session_version']!=session.get('client_session_version'):return {}
+        items,missing,count=client_actions.summary(db(),person,now().isoformat())
+        return {'action_items':[x for x in items if x['state']=='pending'],'action_count':count, 'action_missing':missing,'action_labels':client_actions.ACTIONS,
+                'function_blocks':client_actions.blockers(db(),person,now().isoformat(),session.get('client_auth_method')=='google')}
+    @app.get('/cliente/dados-de-entrega')
+    @client_login_required
+    def client_delivery_data():
+        person=db().execute('SELECT * FROM clients WHERE id=?',(session['client_id'],)).fetchone()
+        restrictions=client_actions.blockers(db(),person,now().isoformat(),session.get('client_auth_method')=='google')['delivery']
+        if restrictions:return render_template('action_blocked.html',requirements=restrictions),403
+        return render_template('delivery_data.html',client=person)
     return app
 
 
@@ -1952,6 +1983,7 @@ def init_db(database):
     connection.execute("""CREATE TABLE IF NOT EXISTS client_regularization_codes (
         client_id BIGINT PRIMARY KEY REFERENCES clients(id) ON DELETE CASCADE, scope_hash TEXT NOT NULL,
         code_hash TEXT NOT NULL,expires_at BIGINT NOT NULL,attempts INTEGER NOT NULL,sent_at BIGINT NOT NULL,sends INTEGER NOT NULL,window_start BIGINT NOT NULL)""")
+    client_actions.schema(connection,id_type)
     ensure_columns(connection, "pickups", {"payment_method": "TEXT", "document_type": "TEXT", "payment_confirmed_at": "TEXT", "payment_confirmed_by": "TEXT",
         "discount_type": "TEXT", "discount_input": "REAL", "discount_amount": "REAL", "original_total": "REAL",
         "final_total": "REAL", "discount_applied_by": "TEXT", "surcharge_amount": "REAL", "surcharge_reason": "TEXT",

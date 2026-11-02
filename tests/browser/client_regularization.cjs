@@ -10,7 +10,7 @@ try{for(const width of [320,390,768,1440])for(const scenario of ['active','legac
  await page.locator('[name=cpf]').fill(scenario==='active'?'cliente@example.com':scenario+'@example.com');await page.locator('[name=password]').fill('senha-segura');await page.getByRole('button',{name:'Entrar',exact:true}).click();
  if(scenario==='inactive'){
   assert.equal(new URL(page.url()).pathname,'/cliente/login');
-  await page.getByRole('button',{name:'Continuar com o Google'}).click();await page.getByRole('link',{name:'Concluir Google simulado'}).click();
+  await page.getByRole('button',{name:'Fazer Login com o Google'}).click();await page.getByRole('link',{name:'Concluir Google simulado'}).click();
   await page.getByText('Este cadastro está inativo.',{exact:false}).waitFor();results.push({width,scenario});await context.close();continue;
  }
  await page.waitForURL('**/cliente');await page.goto(BASE+'/cliente/pendencias');
@@ -35,7 +35,7 @@ try{for(const width of [320,390,768,1440])for(const scenario of ['active','legac
  await page.getByText('Seu cadastro está completo e válido',{exact:false}).waitFor();
  await page.screenshot({path:`/tmp/adelinha-compliance-results/${scenario}-${width}.png`});
  csrf=await page.locator('meta[name=csrf-token]').getAttribute('content');await page.request.post(BASE+'/cliente/sair',{form:{csrf_token:csrf}});await page.goto(BASE+'/cliente/login');
- await page.getByRole('button',{name:'Continuar com o Google'}).click();await page.getByRole('link',{name:'Concluir Google simulado'}).click();
+ await page.getByRole('button',{name:'Fazer Login com o Google'}).click();await page.getByRole('link',{name:'Concluir Google simulado'}).click();
  await page.getByRole('heading',{name:'Confirmar vínculo com o Google'}).waitFor();await page.locator('[name=password]').fill('senha-segura');await page.getByRole('button',{name:'Confirmar e entrar'}).click();await page.waitForURL('**/cliente');
  await page.goto(BASE+'/cliente/condicoes-aceitas');if(scenario!=='legacy')assert(await page.getByRole('heading',{name:'Contrato — Versão 1',exact:true}).count());
  await page.goto(BASE+'/painel');assert.equal(new URL(page.url()).pathname,'/login');results.push({width,scenario});await context.close();

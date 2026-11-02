@@ -198,3 +198,40 @@ def test_regularization_append_only_records_and_email_proof_postgresql(monkeypat
     assert snapshots[1]['source']=='acceptance' and snapshots[1]['signature']==signature()
     assert connection.execute('SELECT signature FROM clients WHERE id=?',(owner,)).fetchone()['signature']==''
     connection.close()
+
+
+@pytest.mark.skipif(not os.environ.get('TEST_DATABASE_URL'), reason='TEST_DATABASE_URL não configurada')
+def test_client_actions_publication_response_versioning_and_restart_postgresql(monkeypatch):
+    import re
+    import app as application
+    from test_customization import csrf,legacy_login
+    from test_app import signature
+    config={'TESTING':True,'SECRET_KEY':'pg-actions','DATABASE':os.environ['TEST_DATABASE_URL']}
+    app=create_app(config);admin=app.test_client();client=app.test_client();legacy_login(admin)
+    captured={};monkeypatch.setattr(application,'send_code',lambda channel,email,code:(captured.update(code=code) or True,'test-only'))
+    connection=DatabaseConnection(config['DATABASE'])
+    owner=connection.execute("SELECT * FROM clients WHERE email='cliente@example.com'").fetchone()
+    assert owner
+    with client.session_transaction() as sess:sess.update(client_id=owner['id'],client_session_version=owner['session_version'])
+    path='/painel/configuracoes/pendencias';hub='/cliente/pendencias-e-autorizacoes'
+    result=admin.post(path,data={'title':'PG confirmação','explanation':'Teste isolado','body':'Versão apresentada PG','kind':'mandatory','audience':'all','actions':['signature','email'],'functions':['delivery'],'csrf_token':csrf(admin)})
+    rid=int(re.search(r'/pendencias/(\d+)',result.location).group(1))
+    row=connection.execute('SELECT * FROM client_action_requests WHERE id=?',(rid,)).fetchone()
+    assert row['status']=='draft'
+    assert admin.post(f'{path}/{rid}/publicar',data={'content_hash':row['content_hash'],'confirm':'yes','csrf_token':csrf(admin)}).status_code==302
+    assert client.get('/cliente/dados-de-entrega').status_code==403
+    page=client.get(f'{hub}/{rid}');scope=re.search(r'name="scope" value="([a-f0-9]+)"',page.text).group(1)
+    assert client.post(f'{hub}/{rid}',data={'scope':scope,'choice':'send_code','csrf_token':csrf(client)}).status_code==200
+    assert client.post(f'{hub}/{rid}',data={'scope':scope,'choice':'accept','signature':signature(),'code':captured['code'],'confirmed':'yes','csrf_token':csrf(client)}).status_code==302
+    answer=dict(connection.execute('SELECT * FROM client_action_responses WHERE request_id=? AND client_id=?',(rid,owner['id'])).fetchone())
+    assert answer['body']==row['body'] and answer['signature']==signature() and answer['email_confirmed_at']
+    assert client.get('/cliente/dados-de-entrega').status_code==200
+    clone=admin.post(f'{path}/{rid}/nova-versao',data={'csrf_token':csrf(admin)})
+    newer=int(clone.location.rsplit('/',1)[1]);assert newer!=rid
+    assert connection.execute('SELECT version FROM client_action_requests WHERE id=?',(newer,)).fetchone()['version']==2
+    admin.post(f'{path}/{rid}/cancelar',data={'csrf_token':csrf(admin)})
+    restarted=create_app(config).test_client()
+    with restarted.session_transaction() as sess:sess.update(client_id=owner['id'],client_session_version=owner['session_version'])
+    assert restarted.get(f'{hub}/{rid}').status_code==200
+    assert dict(connection.execute('SELECT * FROM client_action_responses WHERE id=?',(answer['id'],)).fetchone())==answer
+    connection.close()

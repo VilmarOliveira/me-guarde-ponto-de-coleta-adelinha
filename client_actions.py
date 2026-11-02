@@ -6,7 +6,7 @@ import secrets
 from datetime import datetime
 from core import TZ
 from flask import Blueprint, abort, flash, redirect, render_template, request, session, url_for
-from client_compliance import compliance, signature_data, valid_email, FIELDS, archive_legacy, diagnostics
+from client_compliance import compliance, signature_data, valid_email, FIELDS, archive_legacy, diagnostics, revision_id, notice_record_ids
 from email_challenges import issue as issue_email, verify as verify_email
 
 KINDS={'notice':'Aviso informativo','mandatory':'Regularização obrigatória','optional':'Autorização opcional'}
@@ -18,13 +18,19 @@ CRITERIA={'profile':'Dados do cadastro incompletos','signature':'Assinatura ause
 def unpack(row):
     row=dict(row)
     for field in ('actions','functions','clients'):row[field]=json.loads(row[field+'_json'])
+    row['document_revision_id']=revision_id(row['document_version'],row['body']) if row['is_contract'] else None
     return row
 
 
 def accepted_contract(db,owner,version,text):
-    candidates=[dict(owner)]+[dict(row) for row in db.execute('SELECT * FROM client_contract_records WHERE client_id=? ORDER BY id DESC',(owner['id'],)).fetchall()]
+    history=[dict(row) for row in db.execute('SELECT * FROM client_contract_records WHERE client_id=? ORDER BY id DESC',(owner['id'],)).fetchall()]
+    rejected=notice_record_ids(db,owner['id']) if history else set()
+    candidates=[dict(owner)]+[row for row in history if row['id'] not in rejected]
+    expected=revision_id(version,text)
     for row in candidates:
         if row.get('terms_version')!=version or row.get('terms_text')!=text:continue
+        record_revision=row.get('contract_revision_id') or revision_id(row.get('terms_version'),row.get('terms_text'))
+        if record_revision!=expected:continue
         # Existing evidence, not a new authorization inferred from login.
         from client_compliance import acceptance_key
         proof=db.execute('SELECT email,confirmed_at FROM client_contract_email_confirmations WHERE client_id=? AND acceptance_key=?',(owner['id'],acceptance_key(row))).fetchone()
@@ -76,6 +82,10 @@ def client_items(db,owner,stamp,include_closed=False):
         answer=response_for(db,req['id'],owner['id'])
         evidence=accepted_contract(db,owner,req['document_version'],req['body']) if req['is_contract'] and req['require_existing'] else None
         status=answer['status'] if answer else 'cancelled' if req['status']=='cancelled' else 'completed' if evidence else 'pending'
+        # A response flag alone never proves a contractual acceptance. Require
+        # the exact document, actual signature and confirmed email evidence.
+        if req['is_contract'] and req['require_existing']:
+            status=('accepted' if answer else 'completed') if evidence else 'cancelled' if req['status']=='cancelled' else 'pending'
         if req['starts_at']>stamp and not answer:continue
         req.update(assignment=dict(assigned),answer=dict(answer) if answer else None,state=status,evidence=evidence,overdue=bool(req['due_at'] and req['due_at']<stamp and status=='pending'))
         if include_closed or status=='pending':items.append(req)
@@ -128,6 +138,61 @@ def schema(connection,id_type):
     connection.execute('CREATE INDEX IF NOT EXISTS idx_client_action_responses_owner ON client_action_responses(request_id,client_id,id)')
 
 
+def contract_collision(db,version,text,default):
+    for table in ('clients','client_contract_records'):
+        if db.execute(f'SELECT 1 FROM {table} WHERE terms_version=? AND terms_text IS NOT NULL AND terms_text!=?',(version,text)).fetchone():return True
+    if version==default[0] and text!=default[2]:return True
+    return bool(db.execute("SELECT 1 FROM client_action_requests WHERE published_at IS NOT NULL AND is_contract=1 AND document_version=? AND body!=?",(version,text)).fetchone())
+
+
+def prepare_current_reacceptance(db,default,value,explanation,actor,expected_revision):
+    """Explicit admin/CLI operation; never invoked automatically by startup/login."""
+    explanation=explanation.strip()
+    if not explanation or len(explanation)>2000:raise ValueError('Informe um resumo das mudanças com até 2000 caracteres.')
+    db.commit();db.begin_write()
+    version,label,text=current_contract(db,default)
+    if revision_id(version,text)!=expected_revision:
+        db.rollback();raise ValueError('O contrato vigente mudou. Confira o novo texto antes de exigir o aceite.')
+    source=db.execute("SELECT * FROM client_action_requests WHERE is_contract=1 AND published_at IS NOT NULL AND document_version=? AND body=? ORDER BY published_at DESC,id DESC LIMIT 1",(version,text)).fetchone()
+    family=source['family_key'] if source else 'reaceite-'+expected_revision
+    db.execute('SELECT id FROM client_action_requests WHERE family_key=? AND version=1'+(' FOR UPDATE' if db.postgres else ''),(family,)).fetchone()
+    existing=db.execute("SELECT id FROM client_action_requests WHERE family_key=? AND document_version=? AND body=? AND require_existing=1 AND status IN ('draft','published') ORDER BY id DESC LIMIT 1",(family,version,text)).fetchone()
+    if existing:db.commit();return existing['id']
+    number=db.execute('SELECT COALESCE(MAX(version),0)+1 n FROM client_action_requests WHERE family_key=?',(family,)).fetchone()['n']
+    data=dict(title='Novo aceite do contrato vigente',explanation=explanation,body=text,kind='mandatory',audience='criterion',
+        clients_json='[]',criterion='contract_version',actions_json=json.dumps(['email','signature','terms']),functions_json='[]',
+        starts_at=value,due_at=None,is_contract=1,require_existing=1,document_version=version,document_label=label)
+    data['content_hash']=hashlib.sha256(json.dumps(data,sort_keys=True,ensure_ascii=False).encode()).hexdigest()
+    row=db.execute('INSERT INTO client_action_requests(family_key,version,status,created_at,created_by,'+','.join(data)+') VALUES(?,?,?,?,?,'+','.join('?' for _ in data)+') ON CONFLICT(family_key,version) DO NOTHING RETURNING id',
+        (family,number,'draft',value,actor,*data.values())).fetchone()
+    if not row:row=db.execute('SELECT id FROM client_action_requests WHERE family_key=? AND version=?',(family,number)).fetchone()
+    db.commit();return row['id']
+
+
+def publish_draft(db,req_id,expected_hash,value,default):
+    """Shared explicit publication for the reviewed admin form and deployment CLI."""
+    db.commit();db.begin_write()
+    family=db.execute('SELECT family_key FROM client_action_requests WHERE id=?',(req_id,)).fetchone()
+    if not family:db.rollback();raise LookupError('Solicitação não encontrada.')
+    db.execute('SELECT id FROM client_action_requests WHERE family_key=? AND version=1'+(' FOR UPDATE' if db.postgres else ''),(family['family_key'],)).fetchone()
+    row=db.execute('SELECT * FROM client_action_requests WHERE id=?'+(' FOR UPDATE' if db.postgres else ''),(req_id,)).fetchone()
+    item=unpack(row)
+    if item['status']=='published':db.commit();return
+    if item['status']!='draft' or expected_hash!=item['content_hash']:db.rollback();raise RuntimeError('Prévia desatualizada ou solicitação indisponível.')
+    if item['is_contract'] and contract_collision(db,item['document_version'],item['body'],default):
+        db.rollback();raise ValueError('Conflito de versão contratual. Revise o código técnico; o histórico não foi alterado.')
+    duplicate=db.execute('SELECT id FROM client_action_requests WHERE family_key=? AND published_at IS NOT NULL AND content_hash=?',(item['family_key'],item['content_hash'])).fetchone()
+    if duplicate:db.rollback();raise ValueError('A mesma versão de conteúdo já foi publicada. Edite o rascunho antes de publicar novamente.')
+    if item['is_contract']:
+        db.execute('INSERT INTO client_published_contract_versions(version,body,request_id) VALUES(?,?,?) ON CONFLICT DO NOTHING',(item['document_version'],item['body'],req_id))
+        registered=db.execute('SELECT v.body,r.family_key FROM client_published_contract_versions v JOIN client_action_requests r ON r.id=v.request_id WHERE v.version=?',(item['document_version'],)).fetchone()
+        if registered['body']!=item['body'] or registered['family_key']!=item['family_key']:
+            db.rollback();raise ValueError('Essa versão contratual já foi publicada. Use a solicitação original ou um novo código técnico.')
+    assign_audience(db,item,value)
+    db.execute("UPDATE client_action_requests SET status='cancelled',cancelled_at=?,cancel_reason=? WHERE family_key=? AND status='published'",(value,f'Substituída pela versão {item["version"]}',item['family_key']))
+    db.execute("UPDATE client_action_requests SET status='published',published_at=? WHERE id=?",(value,req_id));db.commit()
+
+
 def install(app,db,client_required,admin_required,current_staff,now,send_code,default_contract):
     bp=Blueprint('client_actions',__name__)
     def stamp():return now().isoformat()
@@ -139,11 +204,6 @@ def install(app,db,client_required,admin_required,current_staff,now,send_code,de
         row=db().execute('SELECT * FROM client_action_requests WHERE id=?',(req_id,)).fetchone()
         if not row:abort(404)
         return unpack(row)
-    def contract_collision(version,text):
-        for table in ('clients','client_contract_records'):
-            if db().execute(f'SELECT 1 FROM {table} WHERE terms_version=? AND terms_text IS NOT NULL AND terms_text!=?',(version,text)).fetchone():return True
-        if version==default_contract()[0] and text!=default_contract()[2]:return True
-        return bool(db().execute("SELECT 1 FROM client_action_requests WHERE published_at IS NOT NULL AND is_contract=1 AND document_version=? AND body!=?",(version,text)).fetchone())
     def parse(previous=None):
         data={key:request.form.get(key,'').strip() for key in ('title','explanation','body','kind','audience','criterion','document_version','document_label')}
         if not data['title'] or len(data['title'])>140 or not data['explanation'] or len(data['explanation'])>2000 or not data['body'] or len(data['body'])>50000:raise ValueError('Informe título, explicação e texto completo dentro dos limites indicados.')
@@ -155,7 +215,7 @@ def install(app,db,client_required,admin_required,current_staff,now,send_code,de
         if data['is_contract']:
             if not data['document_version'] or len(data['document_version'])>100:raise ValueError('Informe um código técnico exclusivo do contrato.')
             data['document_label']=data['document_label'] or data['title']
-            if contract_collision(data['document_version'],data['body']):raise ValueError('Essa versão já identifica outro texto. Escolha um código técnico novo; o histórico será preservado.')
+            if contract_collision(db(),data['document_version'],data['body'],default_contract()):raise ValueError('Essa versão já identifica outro texto. Escolha um código técnico novo; o histórico será preservado.')
             if data['require_existing']:
                 data.update(kind='mandatory',audience='criterion',criterion='contract_version',actions=['email','signature','terms'])
             else:data.update(kind='notice',actions=['read'],functions=[])
@@ -197,8 +257,23 @@ def install(app,db,client_required,admin_required,current_staff,now,send_code,de
                 (secrets.token_hex(16),'draft',stamp(),str(session.get('staff_user_id') or 'administrador-legado'),*data.values())).fetchone();db().commit()
             return redirect(url_for('client_actions.preview',req_id=row['id']))
         rows=[unpack(r) for r in db().execute('SELECT * FROM client_action_requests ORDER BY id DESC').fetchall()]
-        return render_template('actions_admin.html',items=rows,**choices())
+        version,label,text=current_contract(db(),default_contract())
+        affected=sum(not accepted_contract(db(),person,version,text) for person in db().execute('SELECT * FROM clients WHERE active=1').fetchall())
+        return render_template('actions_admin.html',items=rows,current_document={'version':version,'label':label,'text':text,'revision':revision_id(version,text)},affected=affected,**choices())
     def choices():return {'kinds':KINDS,'actions':ACTIONS,'functions':FUNCTIONS,'criteria':CRITERIA,'signature_data':signature_data}
+
+    @bp.post('/painel/configuracoes/pendencias/contrato-vigente/exigir-aceite')
+    @admin_required
+    def require_current():
+        admin()
+        if request.form.get('require_existing')!='yes':abort(400)
+        try:
+            rid=prepare_current_reacceptance(db(),default_contract(),stamp(),request.form.get('summary',''),str(session.get('staff_user_id') or 'administrador-legado'),request.form.get('expected_revision'))
+        except ValueError as error:
+            flash(str(error),'error');return redirect(url_for('client_actions.admin_hub'))
+        entry=get(rid)
+        flash('Exigência do contrato vigente preparada. Confira a prévia e publique para gerar as pendências.' if entry['status']=='draft' else 'Esta revisão já possui uma exigência publicada; nenhuma duplicidade foi criada.','success')
+        return redirect(url_for('client_actions.preview' if entry['status']=='draft' else 'client_actions.tracking',req_id=rid))
 
     @bp.route('/painel/configuracoes/pendencias/<int:req_id>',methods=['GET','POST'])
     @admin_required
@@ -225,29 +300,13 @@ def install(app,db,client_required,admin_required,current_staff,now,send_code,de
     @bp.post('/painel/configuracoes/pendencias/<int:req_id>/publicar')
     @admin_required
     def publish(req_id):
-        admin();db().commit();db().begin_write()
-        family=db().execute('SELECT family_key FROM client_action_requests WHERE id=?',(req_id,)).fetchone()
-        if not family:abort(404)
-        # Every publisher takes the family lock first, so simultaneous versions
-        # cannot both remain active or cancel each other in a different order.
-        db().execute('SELECT id FROM client_action_requests WHERE family_key=? AND version=1'+(' FOR UPDATE' if db().postgres else ''),(family['family_key'],)).fetchone()
-        row=db().execute('SELECT * FROM client_action_requests WHERE id=?'+(' FOR UPDATE' if db().postgres else ''),(req_id,)).fetchone()
-        item=unpack(row)
-        if item['status']=='published':db().commit();return redirect(url_for('client_actions.tracking',req_id=req_id))
-        if item['status']!='draft' or request.form.get('content_hash')!=item['content_hash'] or request.form.get('confirm')!='yes':db().rollback();abort(409)
-        if item['is_contract'] and contract_collision(item['document_version'],item['body']):db().rollback();flash('Conflito de versão contratual. Revise o código técnico.','error');return redirect(url_for('client_actions.admin_edit',req_id=req_id))
-        duplicate=db().execute('SELECT id FROM client_action_requests WHERE family_key=? AND published_at IS NOT NULL AND content_hash=?',(item['family_key'],item['content_hash'])).fetchone()
-        if duplicate:
-            db().rollback();flash('A mesma versão de conteúdo já foi publicada. Edite o rascunho antes de publicar novamente.','error');return redirect(url_for('client_actions.admin_edit',req_id=req_id))
-        if item['is_contract']:
-            db().execute('INSERT INTO client_published_contract_versions(version,body,request_id) VALUES(?,?,?) ON CONFLICT DO NOTHING',(item['document_version'],item['body'],req_id))
-            registered=db().execute('SELECT v.body,r.family_key FROM client_published_contract_versions v JOIN client_action_requests r ON r.id=v.request_id WHERE v.version=?',(item['document_version'],)).fetchone()
-            if registered['body']!=item['body'] or registered['family_key']!=item['family_key']:
-                db().rollback();flash('Essa versão contratual já foi publicada. Use a solicitação original ou um novo código técnico.','error');return redirect(url_for('client_actions.admin_edit',req_id=req_id))
-        value=stamp()
-        assign_audience(db(),item,value)
-        db().execute("UPDATE client_action_requests SET status='cancelled',cancelled_at=?,cancel_reason=? WHERE family_key=? AND status='published'",(value,f'Substituída pela versão {item["version"]}',item['family_key']))
-        db().execute("UPDATE client_action_requests SET status='published',published_at=? WHERE id=?",(value,req_id));db().commit()
+        admin()
+        if request.form.get('confirm')!='yes':abort(409)
+        try:publish_draft(db(),req_id,request.form.get('content_hash'),stamp(),default_contract())
+        except LookupError:abort(404)
+        except RuntimeError:abort(409)
+        except ValueError as error:
+            flash(str(error),'error');return redirect(url_for('client_actions.admin_edit',req_id=req_id))
         flash('Solicitação publicada. Nenhuma resposta foi registrada em nome dos clientes.','success');return redirect(url_for('client_actions.tracking',req_id=req_id))
 
     @bp.post('/painel/configuracoes/pendencias/<int:req_id>/nova-versao')
@@ -311,7 +370,7 @@ def install(app,db,client_required,admin_required,current_staff,now,send_code,de
         if session.get('staff'):abort(403)
         if item['status']!='published' or item['state'] in ('completed','cancelled'):abort(409)
         choice=request.form.get('choice','')
-        if item['answer'] and not (item['kind']=='optional' and item['state']=='accepted' and choice=='revoke'):return redirect(url_for('client_actions.resolve',req_id=req_id))
+        if item['answer'] and not (item['is_contract'] and item['require_existing'] and item['state']=='pending') and not (item['kind']=='optional' and item['state']=='accepted' and choice=='revoke'):return redirect(url_for('client_actions.resolve',req_id=req_id))
         if request.form.get('scope')!=token(person,item):flash('A solicitação ou o cadastro mudou. Recarregue antes de responder.','error');return render(person,item,409)
         refusal=item['kind']=='optional' and choice in ('decline','revoke')
         if choice=='send_code':
@@ -340,10 +399,10 @@ def install(app,db,client_required,admin_required,current_staff,now,send_code,de
             email_at=value
         signature=request.form.get('signature','') if not refusal and 'signature' in item['actions'] else None
         if not refusal and 'profile' in item['actions']:profile_audit=audit['id']
-        if item['is_contract'] and not refusal:
+        if item['is_contract'] and item['require_existing'] and not refusal:
             archive_legacy(db(),fresh,value)
             fields={key:None for key in FIELDS}
-            fields.update(public_id=fresh['public_id'],contract_public_id=fresh['public_id'],name=fresh['name'],cpf=fresh['cpf'],terms_version=item['document_version'],terms_text=item['body'],terms_display_label=item['document_label'],signature=signature,accepted_at=value,confirmation_channel='email',confirmation_destination=fresh['email'],confirmation_validated_at=value,document_brand_version=app.config['CURRENT_DOCUMENT_BRAND'],document_logo_present=app.config['CURRENT_DOCUMENT_LOGO'],accept_ip=request.remote_addr,accept_user_agent=request.headers.get('User-Agent','')[:500])
+            fields.update(public_id=fresh['public_id'],contract_public_id=fresh['public_id'],name=fresh['name'],cpf=fresh['cpf'],terms_version=item['document_version'],terms_text=item['body'],terms_display_label=item['document_label'],contract_revision_id=item['document_revision_id'],signature=signature,accepted_at=value,confirmation_channel='email',confirmation_destination=fresh['email'],confirmation_validated_at=value,document_brand_version=app.config['CURRENT_DOCUMENT_BRAND'],document_logo_present=app.config['CURRENT_DOCUMENT_LOGO'],accept_ip=request.remote_addr,accept_user_agent=request.headers.get('User-Agent','')[:500])
             fields['contract_hash']=hashlib.sha256(json.dumps(fields,sort_keys=True,ensure_ascii=False).encode()).hexdigest();fields['contract_id']='ACEITE-'+secrets.token_hex(12)
             record_id=db().execute('INSERT INTO client_contract_records(client_id,source,recorded_at,'+','.join(FIELDS)+') VALUES(?,?,?,'+','.join('?' for _ in FIELDS)+') RETURNING id',(fresh['id'],'acceptance',value,*[fields[k] for k in FIELDS])).fetchone()['id']
         state='declined' if refusal else 'accepted' if item['kind']=='optional' or 'terms' in item['actions'] else 'completed'

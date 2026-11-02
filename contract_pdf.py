@@ -35,6 +35,7 @@ def build_contract_pdf(client):
     line(f"Contratante: {client['name']} | CPF: {client['cpf']} | Código: {code}")
     if 'terms_display_label' in client.keys() and client['terms_display_label']: line(client['terms_display_label'],True)
     line(f"Versão: {client['terms_version']} | Aceite: {client['accepted_at']}")
+    if 'contract_revision_id' in client.keys() and client['contract_revision_id']:line('Revisão: '+client['contract_revision_id'])
     for paragraph in (client['terms_text'] or 'Texto histórico não registrado').splitlines(): line(paragraph, paragraph[:2].rstrip('.').isdigit() or paragraph.isupper())
     if y<150: pdf.showPage(); y=height-45; brand_page()
     line('Assinatura registrada:',True)
@@ -58,6 +59,8 @@ def build_current_contract_pdf(text, version, label=None):
     style = ParagraphStyle('contract', fontName=normal, fontSize=10, leading=15, spaceAfter=8)
     heading = ParagraphStyle('heading', parent=style, fontName=bold, fontSize=12, leading=17)
     story = [Paragraph(escape(label or version), heading), Paragraph(escape(version) + ' — contrato vigente, sem aceite', style), Spacer(1, 10)]
+    from client_compliance import revision_id
+    story.append(Paragraph('Revisão: '+revision_id(version,text),style))
     for paragraph in text.split('\n\n'):
         story.append(Paragraph(escape(paragraph).replace('\n', '<br/>'), style))
     SimpleDocTemplate(output, pagesize=A4, rightMargin=45, leftMargin=45, topMargin=45, bottomMargin=45).build(story)

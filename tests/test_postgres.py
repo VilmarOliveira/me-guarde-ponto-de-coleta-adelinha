@@ -235,3 +235,43 @@ def test_client_actions_publication_response_versioning_and_restart_postgresql(m
     assert restarted.get(f'{hub}/{rid}').status_code==200
     assert dict(connection.execute('SELECT * FROM client_action_responses WHERE id=?',(answer['id'],)).fetchone())==answer
     connection.close()
+
+
+@pytest.mark.skipif(not os.environ.get('TEST_DATABASE_URL'), reason='TEST_DATABASE_URL não configurada')
+def test_reaccept_current_contract_preserves_old_pg_evidence(monkeypatch):
+    import app as application
+    from test_customization import csrf,legacy_login
+    from test_app import signature
+    from client_compliance import revision_id
+    from client_actions import current_contract,client_items
+    from contract import CONTRACT_VERSION,CONTRACT_LABEL
+    from app import terms_text
+    from datetime import datetime
+    from core import TZ
+    config={'TESTING':True,'SECRET_KEY':'pg-reaccept','DATABASE':os.environ['TEST_DATABASE_URL']}
+    app=create_app(config);admin=app.test_client();client=app.test_client();legacy_login(admin)
+    db=DatabaseConnection(config['DATABASE']);owner=db.execute("SELECT * FROM clients WHERE email='cliente@example.com'").fetchone()
+    assert owner
+    from app import next_public_code
+    values={k:v for k,v in owner.items() if k!='id'}
+    public_id=next_public_code(db,'CLIPCA')
+    values.update(public_id=public_id,contract_public_id=public_id,cpf='11144477735',email='reaccept@example.test',terms_version='CONTRATO-2026-v2',terms_text='Texto antigo em PG',contract_revision_id=None,confirmation_channel='email',confirmation_destination='reaccept@example.test',confirmation_validated_at=owner['accepted_at'])
+    owner_id=db.execute('INSERT INTO clients('+','.join(values)+') VALUES('+','.join('?' for _ in values)+') RETURNING id',tuple(values.values())).fetchone()['id'];db.commit()
+    owner=db.execute('SELECT * FROM clients WHERE id=?',(owner_id,)).fetchone();before=dict(owner)
+    with client.session_transaction() as sess:sess.update(client_id=owner['id'],client_session_version=owner['session_version'])
+    default=(CONTRACT_VERSION,CONTRACT_LABEL,terms_text());version,label,text=current_contract(db,default)
+    result=admin.post('/painel/configuracoes/pendencias/contrato-vigente/exigir-aceite',data={'summary':'Exigir explicitamente o aceite do texto vigente em PG','expected_revision':revision_id(version,text),'require_existing':'yes','csrf_token':csrf(admin)})
+    rid=int(result.location.split('/')[-2]);row=db.execute('SELECT * FROM client_action_requests WHERE id=?',(rid,)).fetchone()
+    admin.post(f'/painel/configuracoes/pendencias/{rid}/publicar',data={'content_hash':row['content_hash'],'confirm':'yes','csrf_token':csrf(admin)})
+    assert any(x['id']==rid for x in client_items(db,owner,datetime.now(TZ).isoformat()))
+    import re
+    page=client.get(f'/cliente/pendencias-e-autorizacoes/{rid}');scope=re.search(r'name="scope" value="([a-f0-9]+)"',page.text).group(1)
+    captured={};monkeypatch.setattr(application,'send_code',lambda channel,email,code:(captured.update(code=code) or True,'fixture'))
+    client.post(f'/cliente/pendencias-e-autorizacoes/{rid}',data={'choice':'send_code','scope':scope,'csrf_token':csrf(client)})
+    assert client.post(f'/cliente/pendencias-e-autorizacoes/{rid}',data={'choice':'accept','scope':scope,'confirmed':'yes','signature':signature(),'code':captured['code'],'csrf_token':csrf(client)}).status_code==302
+    assert not any(x['id']==rid for x in client_items(db,owner,datetime.now(TZ).isoformat()))
+    assert dict(db.execute('SELECT * FROM clients WHERE id=?',(owner['id'],)).fetchone())==before
+    accepted=db.execute("SELECT * FROM client_contract_records WHERE client_id=? AND source='acceptance' ORDER BY id DESC LIMIT 1",(owner['id'],)).fetchone()
+    assert accepted['contract_revision_id']==revision_id(version,text)
+    assert accepted['signature'] and accepted['confirmation_validated_at']
+    db.close()

@@ -32,7 +32,7 @@ from receipt_pdf import build_receipt_pdf
 from notifications import notification_config_status, send_code
 from contract import CONTRACT_TEXT, CONTRACT_VERSION, CONTRACT_LABEL
 from privacy_policy import PRIVACY_UPDATED, PRIVACY_CONTACT as PRIVACY_EMAIL, PRIVACY_REVIEW_PENDING
-from client_compliance import FIELDS as CONTRACT_FIELDS, compliance, effective_record, signature_data
+from client_compliance import FIELDS as CONTRACT_FIELDS, compliance, effective_record, signature_data, revision_id
 from client_regularization import install_regularization
 import client_actions
 from contract_pdf import build_contract_pdf, build_current_contract_pdf
@@ -1002,10 +1002,10 @@ def create_app(test_config=None):
         )
         client_id = cur.fetchone()["id"]
         integrity = hashlib.sha256((public_id + name + cpf + text + signature + accepted_at).encode()).hexdigest()
-        db().execute("UPDATE clients SET contract_id=?,contract_hash=?,contract_public_id=?,document_brand_version=?,document_logo_present=?,confirmation_channel=?,confirmation_destination=?,confirmation_validated_at=?,accept_ip=?,accept_user_agent=?,terms_display_label=? WHERE id=?",
+        db().execute("UPDATE clients SET contract_id=?,contract_hash=?,contract_public_id=?,document_brand_version=?,document_logo_present=?,confirmation_channel=?,confirmation_destination=?,confirmation_validated_at=?,accept_ip=?,accept_user_agent=?,terms_display_label=?,contract_revision_id=? WHERE id=?",
             (f"CTRPCA-{client_id}", integrity, public_id, BRAND_VERSION, int(ORIGINAL_LOGO.is_file()), confirmation.get("channel") if confirmation else "teste",
              confirmation.get("destination") if confirmation else None, accepted_at,
-             request.headers.get("X-Forwarded-For", request.remote_addr), request.headers.get("User-Agent", "")[:500], label, client_id))
+             request.headers.get("X-Forwarded-For", request.remote_addr), request.headers.get("User-Agent", "")[:500], label, revision_id(version,text), client_id))
         db().commit()
         session.pop("registration_confirmation", None)
         session.pop("google_registration_required", None)
@@ -1051,7 +1051,7 @@ def create_app(test_config=None):
         if not back.startswith("/") or back.startswith("//"):
             back = url_for("index")
         version,label,text=current_contract()
-        return render_template("terms.html", version=version, exact_text=text, back=back, contract_label=label)
+        return render_template("terms.html", version=version, exact_text=text, back=back, contract_label=label,document_revision_id=revision_id(version,text))
 
     @app.get('/condicoes/pdf')
     def current_contract_pdf():
@@ -1969,11 +1969,12 @@ def init_db(database):
         "confirmation_channel": "TEXT", "confirmation_destination": "TEXT", "confirmation_validated_at": "TEXT",
         "accept_ip": "TEXT", "accept_user_agent": "TEXT",
         "legacy_public_id": "TEXT", "contract_public_id": "TEXT", "document_brand_version": "TEXT", "document_logo_present": "INTEGER NOT NULL DEFAULT 0"})
-    ensure_columns(connection, 'clients', {'terms_display_label':'TEXT'})
+    ensure_columns(connection, 'clients', {'terms_display_label':'TEXT','contract_revision_id':'TEXT'})
     snapshot_columns=','.join(name + (' INTEGER' if name=='document_logo_present' else ' TEXT') for name in CONTRACT_FIELDS)
     connection.execute(f"""CREATE TABLE IF NOT EXISTS client_contract_records (
         id {id_type}, client_id BIGINT NOT NULL REFERENCES clients(id), source TEXT NOT NULL,
         recorded_at TEXT NOT NULL,{snapshot_columns})""")
+    ensure_columns(connection, "client_contract_records", {"contract_revision_id":"TEXT"})
     connection.execute("CREATE INDEX IF NOT EXISTS idx_client_contract_owner ON client_contract_records(client_id,id)")
     connection.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_client_original_contract ON client_contract_records(client_id) WHERE source='legacy'")
     connection.execute(f"""CREATE TABLE IF NOT EXISTS client_contract_email_confirmations (

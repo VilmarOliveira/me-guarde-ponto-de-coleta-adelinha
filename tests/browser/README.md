@@ -112,3 +112,11 @@ NODE_PATH=/tmp/adelinha-browser/node_modules node tests/browser/client_actions.c
 ```
 
 O teste usa as sete larguras, publicação pelo administrador, resposta expressa/recusa, assinatura por toque/mouse, códigos de e-mail simulados, restrições no servidor, versões, cancelamento e ambos os logins. Relatório e capturas em `/tmp/adelinha-actions-results`. Não conecta ao Google nem envia e-mails reais.
+
+Novo aceite da revisão contratual já publicada (mesmo servidor `serve_client_actions.py`, com banco temporário novo):
+
+```bash
+NODE_PATH=/tmp/adelinha-browser/node_modules node tests/browser/contract_reacceptance.cjs
+```
+
+Publica um contrato informativo, ativa depois a exigência do texto já vigente e verifica clientes antigos por senha/Google, título visual idêntico com revisão diferente, assinatura e código, histórico e repetição sem duplicidade em 320, 390, 768 e 1440 px. Relatório em `/tmp/adelinha-reaccept-results`.

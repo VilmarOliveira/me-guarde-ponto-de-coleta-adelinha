@@ -28,6 +28,8 @@ Clientes ativos com pendências podem autenticar pelo Google e acessar a regular
 
 ## Contratos, versões e cancelamento
 
+Para aplicar a exigência a um contrato **já vigente**, use a nova seção **Contrato vigente** desta tela. O procedimento, a identificação imutável de revisões e o comando de implantação estão em [Correção do aceite de revisão](correcao-aceite-revisao-contrato.md).
+
 O formulário permite **Publicar este texto como contrato vigente para novos cadastros**, com código técnico exclusivo e título. Não preencha outro texto com um código já utilizado: o servidor verifica os contratos históricos e as versões publicadas.
 
 - Sem **Exigir novo aceite dos clientes existentes**, a publicação é informativa para eles; novos cadastros usam o novo texto na data de início. Não modifica aceites antigos.

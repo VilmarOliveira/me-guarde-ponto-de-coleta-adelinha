@@ -276,3 +276,45 @@ def test_reaccept_current_contract_preserves_old_pg_evidence(monkeypatch):
     assert accepted['contract_revision_id']==revision_id(version,text)
     assert accepted['signature'] and accepted['confirmation_validated_at']
     db.close()
+
+
+@pytest.mark.skipif(not os.environ.get('TEST_DATABASE_URL'), reason='TEST_DATABASE_URL não configurada')
+def test_blog_icons_long_preview_assets_and_archive_persist_pg():
+    import io
+    from PIL import Image
+    from test_customization import csrf,legacy_login
+    config={'TESTING':True,'SECRET_KEY':'pg-blog','DATABASE':os.environ['TEST_DATABASE_URL']}
+    app=create_app(config);admin=app.test_client();legacy_login(admin)
+    image=io.BytesIO();Image.new('RGBA',(128,128),(0,150,150,0)).save(image,'PNG');content=image.getvalue()
+    uploaded=admin.post('/painel/blog/icones',data={'identifier':'caixa-pg','name':'Caixa PostgreSQL','image':(io.BytesIO(content),'icone.png'),'csrf_token':csrf(admin)},headers={'X-Requested-With':'XMLHttpRequest'})
+    assert uploaded.status_code==200;url=uploaded.json['icon']['src']
+    body='Introdução completa.\n\n'+('Parágrafo com acentos e informação.\n\n'*300)+'[icone:caixa-pg] Um assunto\n\nTexto.\n\n[icone:sino] Um assunto\n\nFinal do artigo.'
+    data={'title':'Artigo PG com ícones','slug':'blog-icones-postgresql','summary':'Resumo preservado','body':body,'layout':'icons','toc_enabled':'yes','action':'publish','csrf_token':csrf(admin)}
+    assert admin.post('/painel/blog',data=data).status_code==302
+    assert url in app.test_client().get('/blog/blog-icones-postgresql').text
+    assert 'blog-secao-2' in admin.post('/painel/blog/previa',data=data).json['html']
+    assert admin.post('/painel/blog/icones/caixa-pg/remover',data={'csrf_token':csrf(admin)}).status_code==302
+    restarted=create_app(config).test_client()
+    assert restarted.get(url).data==content and url in restarted.get('/blog/blog-icones-postgresql').text
+    connection=DatabaseConnection(config['DATABASE'])
+    assert connection.execute('SELECT layout,toc_enabled FROM blog_posts WHERE slug=?',('blog-icones-postgresql',)).fetchone()=={'layout':'icons','toc_enabled':1}
+    assert connection.execute('SELECT active FROM blog_icons WHERE identifier=?',('caixa-pg',)).fetchone()['active']==0
+    connection.close()
+
+
+@pytest.mark.skipif(not os.environ.get('TEST_DATABASE_URL'), reason='TEST_DATABASE_URL não configurada')
+def test_blog_icon_assets_are_included_in_sqlite_to_postgres_transfer(tmp_path):
+    import io
+    from PIL import Image
+    from scripts.migrate_sqlite_to_postgres import migrate
+    from test_customization import csrf,legacy_login
+    source=str(tmp_path/'source-blog.db');source_app=create_app({'TESTING':True,'SECRET_KEY':'migration-fixture','DATABASE':source});admin=source_app.test_client();legacy_login(admin)
+    image=io.BytesIO();Image.new('RGBA',(64,180),(255,100,0,150)).save(image,'PNG');data=image.getvalue()
+    result=admin.post('/painel/blog/icones',data={'identifier':'migrado-png','name':'Ícone vertical migrado','image':(io.BytesIO(data),'vertical.png'),'csrf_token':csrf(admin)},headers={'X-Requested-With':'XMLHttpRequest'})
+    assert result.status_code==200
+    digest=result.json['icon']['src'].rsplit('/',1)[1]
+    migrate(source,os.environ['TEST_DATABASE_URL'])
+    target=DatabaseConnection(os.environ['TEST_DATABASE_URL'])
+    assert bytes(target.execute('SELECT image FROM blog_icon_assets WHERE digest=?',(digest,)).fetchone()['image'])==data
+    assert target.execute('SELECT name,asset_hash FROM blog_icons WHERE identifier=?',('migrado-png',)).fetchone()=={'name':'Ícone vertical migrado','asset_hash':digest}
+    target.close()

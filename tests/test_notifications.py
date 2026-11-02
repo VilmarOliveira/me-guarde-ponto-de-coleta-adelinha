@@ -90,3 +90,45 @@ def test_whatsapp_provider_error_is_reported(monkeypatch):
     monkeypatch.setattr(notifications, "urlopen", lambda *args, **kwargs: (_ for _ in ()).throw(error))
     ok, detail = notifications.send_code("whatsapp", "16988004966", "123456")
     assert not ok and "132001" in detail and "Template not found" in detail
+
+
+def test_confirmation_email_exact_mime_content_and_leading_zeroes(monkeypatch):
+    from email import policy
+    from email.parser import BytesParser
+    from email.utils import parseaddr
+    from html.parser import HTMLParser
+    gmail_environment(monkeypatch)
+    messages=[]
+    def fake_open(request,timeout):
+        if request.full_url.endswith('/token'):return Response({'access_token':'fixture-token'})
+        messages.append(BytesParser(policy=policy.default).parsebytes(base64.urlsafe_b64decode(json.loads(request.data)['raw'])))
+        return Response({'id':'fixture-message'})
+    monkeypatch.setattr(notifications,'urlopen',fake_open)
+    assert notifications.send_code('email','cliente@example.test','001023')[0]
+    mail=messages[0]
+    assert str(mail['Subject'])=='Código de confirmação — Ponto de Coleta Adelinha'
+    assert parseaddr(str(mail['From']))==('Ponto de Coleta Adelinha','pontodecoletaadelinha@gmail.com')
+    assert str(mail['Reply-To'])=='pontodecoletaadelinha@gmail.com'
+    assert str(mail['To'])=='cliente@example.test'
+    expected=('Ponto de Coleta Adelinha\n\nCódigo de confirmação: 001023\n\nEle expira em 10 minutos.\n\n'
+              'PONTO DE COLETA ADELINHA\nME GUARDE — COMPROU? DEIXA COM A GENTE.\n')
+    assert mail.get_body(preferencelist=('plain',)).get_content().replace('\r\n','\n')==expected
+    html=mail.get_body(preferencelist=('html',)).get_content()
+    class Text(HTMLParser):
+        def __init__(self):super().__init__();self.parts=[]
+        def handle_data(self,data):self.parts.append(data)
+        def handle_starttag(self,tag,attrs):
+            if tag=='br':self.parts.append(' ')
+    visible=Text();visible.feed(html)
+    assert ' '.join(''.join(visible.parts).split())==' '.join(expected.split())
+    assert '<strong style="font-size:28px;white-space:nowrap">001023</strong>' in html
+    assert html.count('ME GUARDE')==1 and html.count('Código de confirmação:')==1
+    assert 'Unidade Amor Infinito' not in html and '<h2' not in html
+    assert [part.get_content_type() for part in mail.walk()]==['multipart/alternative','text/plain','text/html']
+
+
+def test_confirmation_email_provider_refusal_is_not_success(monkeypatch):
+    gmail_environment(monkeypatch)
+    monkeypatch.setattr(notifications,'urlopen',lambda request,timeout:Response({'access_token':'fixture-token'}) if request.full_url.endswith('/token') else Response({}))
+    ok,detail=notifications.send_code('email','cliente@example.test','000001')
+    assert not ok and 'não confirmou' in detail

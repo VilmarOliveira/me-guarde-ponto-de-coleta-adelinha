@@ -124,17 +124,27 @@ def test_no_registration_no_automatic_account_and_message_visible(site):
     assert 'id="cadastro"' in result.text
     with sqlite3.connect(site[2]) as db:assert db.execute('SELECT count(*) FROM clients').fetchone()[0]==1
 
-@pytest.mark.parametrize('sql,fragment',[
-    ('UPDATE clients SET active=0','inativo'),
-    ('UPDATE clients SET confirmation_validated_at=NULL','etapas pendentes'),
-    ("UPDATE clients SET confirmation_channel='teste'",'etapas pendentes'),
-    ("UPDATE clients SET signature=''",'etapas pendentes'),
-    ("UPDATE clients SET residential_street=''",'etapas pendentes'),
-])
-def test_ineligible_client_cannot_access(site,sql,fragment):
-    with sqlite3.connect(site[2]) as db:db.execute(sql)
-    assert fragment in callback(site).text
+def test_inactive_client_cannot_access(site):
+    with sqlite3.connect(site[2]) as db:db.execute('UPDATE clients SET active=0')
+    assert 'inativo' in callback(site).text
     with site[1].session_transaction() as session:assert not session.get('client_id')
+
+@pytest.mark.parametrize('sql',[
+    'UPDATE clients SET confirmation_validated_at=NULL',
+    "UPDATE clients SET confirmation_channel='teste'",
+    "UPDATE clients SET signature=''",
+    "UPDATE clients SET residential_street=''",
+])
+def test_pending_client_authenticates_and_can_regularize(site,sql):
+    with sqlite3.connect(site[2]) as db:db.execute(sql)
+    assert 'Confirmar vínculo' in callback(site).text
+    client=site[1]
+    result=client.post('/cliente/google/confirmar',data={'password':'senha-segura','csrf_token':csrf(client)},follow_redirects=True)
+    assert result.request.path=='/cliente'
+    assert client.get('/cliente/pendencias').status_code==200
+    assert client.get('/cliente/pendencias-e-autorizacoes').status_code==200
+    assert client.get('/cliente/dados-de-entrega').status_code==403
+    with client.session_transaction() as session:assert session['client_id']==1 and not session.get('staff')
 
 
 def test_state_csrf_replay_cancellation_and_expiry(site):
@@ -180,14 +190,14 @@ def test_account_changes_duplicate_email_cancel_and_switch_identity(site):
 
 def test_config_hides_button_preserves_password_login_and_staff(site):
     app,client,database,state=site
-    assert 'Continuar com o Google' in client.get('/cliente/login').text
+    assert 'Fazer Login com o Google' in client.get('/cliente/login').text
     app.config['GOOGLE_LOGIN_ENABLED']='0'
-    assert 'Continuar com o Google' not in client.get('/cliente/login').text
+    assert 'Fazer Login com o Google' not in client.get('/cliente/login').text
     assert client.post('/cliente/google/iniciar',data={'csrf_token':csrf(client)}).status_code==404
     assert client.post('/cliente/login',data={'cpf':'cliente@example.com','password':'senha-segura','csrf_token':csrf(client)}).location=='/cliente'
     client.post('/cliente/sair',data={'csrf_token':csrf(client)})
     app.config['GOOGLE_LOGIN_ENABLED']='1';app.config['GOOGLE_LOGIN_CLIENT_SECRET']=''
-    assert 'Continuar com o Google' not in client.get('/cliente/login').text
+    assert 'Fazer Login com o Google' not in client.get('/cliente/login').text
     with client.session_transaction() as session:session.update(staff='staff',staff_legacy=True)
     assert client.post('/cliente/google/iniciar',data={'csrf_token':csrf(client)}).location=='/painel'
 

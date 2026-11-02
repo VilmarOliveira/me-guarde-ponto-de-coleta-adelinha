@@ -131,7 +131,7 @@ curl --fail --silent --show-error https://pontodecoletaadl.servehttp.com/health
 1. Abra `https://pontodecoletaadl.servehttp.com/condicoes` e o PDF `/condicoes/pdf`; confira v3 e a cláusula. Abra um aceite antigo e seu PDF, confirmando o texto e a versão históricos.
 2. Abra `https://pontodecoletaadl.servehttp.com/cliente/login` em computador e celular. Confira CPF/e-mail e senha e o botão Google. Com a opção desativada ou incompleta, o botão deve sumir e o acesso por senha continuar funcionando.
 3. Com cliente completo e ativo: Google → escolha a mesma conta de e-mail → confirme a senha do cadastro apenas no primeiro vínculo → Área do Cliente. Saia e repita: a mesma identidade entra sem pedir a senha novamente. Verifique que `/painel` e as ações da equipe continuam exigindo login de equipe.
-4. Com e-mail sem cadastro: conferir a mensagem junto do formulário de cadastro, sem conta nova criada. Com cadastro incompleto ou inativo: conferir orientação/bloqueio, sem acesso liberado.
+4. Com e-mail sem cadastro: conferir a mensagem junto do formulário de cadastro, sem conta nova criada. Com cadastro incompleto e ativo: conferir autenticação, acesso à central e restrição das funções dependentes até regularizar. Com conta inativa: conferir bloqueio do login. O primeiro vínculo continua exigindo a senha existente.
 5. Cancele a escolha da conta; tente senha incorreta na vinculação; confira recuperação de senha. Teste indisponibilidade e token inválido exclusivamente em ambiente de homologação, nunca adulterando credenciais ou rede de produção.
 6. Confira que o envio de códigos pela Gmail API continua funcionando com as variáveis anteriores. Este passo usa o remetente e a integração já autorizados no estabelecimento.
 

@@ -81,8 +81,9 @@ def eligibility(client, record=None, email_confirmed=False):
 
 def install_google_login(app, db, login_blocked, record_login):
     def check_eligibility(client):
-        record, missing = compliance(db(),client)
-        return eligibility(client,record,not any(item['key']=='email_confirmation' for item in missing))
+        # Authentication is independent of pending actions. An active client can
+        # enter the center; dependent functions enforce their own restrictions.
+        return None if client['active'] else eligibility(client)
 
     bp = Blueprint('google_login', __name__, url_prefix='/cliente/google')
     digest = lambda value: hashlib.sha256(value.encode()).hexdigest()
@@ -102,6 +103,7 @@ def install_google_login(app, db, login_blocked, record_login):
         session.clear()
         session['client_id'] = client['id']
         session['client_session_version'] = client['session_version']
+        session['client_auth_method'] = 'google'
         return redirect(url_for('client_area'))
 
     @app.context_processor
@@ -195,6 +197,7 @@ def install_google_login(app, db, login_blocked, record_login):
             return fail('Vinculação cancelada. Você pode continuar entrando com sua senha.')
         client = db().execute('SELECT * FROM clients WHERE id=?',(pending['client_id'],)).fetchone()
         if not client: return fail()
+        if not client['password_hash']:return fail('Recupere ou defina a senha do cadastro antes do primeiro vínculo com Google.')
         problem = check_eligibility(client)
         if problem: return fail(problem)
         if client['email'].strip().lower()!=pending['email'] or client['session_version']!=pending['session_version']: return fail('O cadastro mudou. Inicie novamente a vinculação.')

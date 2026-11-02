@@ -103,3 +103,12 @@ NODE_PATH=/tmp/adelinha-browser/node_modules node tests/browser/privacy.cjs
 ```
 
 Confere as duas páginas públicas, rodapés, novas abas, dados/senha/código/assinatura mantidos no formulário e rascunho sem senha/código, inclusive com armazenamento bloqueado, nas sete larguras. Resultados em `/tmp/adelinha-privacy-results`.
+
+Central de pendências e autorizações (servidor isolado, clientes fictícios):
+
+```bash
+.venv/bin/python tests/browser/serve_client_actions.py
+NODE_PATH=/tmp/adelinha-browser/node_modules node tests/browser/client_actions.cjs
+```
+
+O teste usa as sete larguras, publicação pelo administrador, resposta expressa/recusa, assinatura por toque/mouse, códigos de e-mail simulados, restrições no servidor, versões, cancelamento e ambos os logins. Relatório e capturas em `/tmp/adelinha-actions-results`. Não conecta ao Google nem envia e-mails reais.

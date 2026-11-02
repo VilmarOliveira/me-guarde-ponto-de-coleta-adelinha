@@ -13,7 +13,7 @@ from app import DatabaseConnection, init_db
 
 TABLES = (
     "clients", "packages", "pickups", "pickup_packages", "password_tokens",
-    "login_attempts", "audit_logs", "settings", "blog_posts", "verification_codes",
+    "login_attempts", "audit_logs", "settings", "blog_posts", "blog_icon_assets", "blog_icons", "verification_codes",
     "reminder_logs", "site_banners", "site_photos", "site_themes", "staff_users",
     "staff_recovery_codes", "id_sequences", "analytics_events",
 )

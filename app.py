@@ -35,6 +35,7 @@ from privacy_policy import PRIVACY_UPDATED, PRIVACY_CONTACT as PRIVACY_EMAIL, PR
 from client_compliance import FIELDS as CONTRACT_FIELDS, compliance, effective_record, signature_data, revision_id
 from client_regularization import install_regularization
 import client_actions
+import blog_tools
 from contract_pdf import build_contract_pdf, build_current_contract_pdf
 from google_login import install_google_login
 
@@ -862,16 +863,16 @@ def create_app(test_config=None):
 
     @app.get("/blog")
     def blog():
-        posts = db().execute("SELECT slug,title,summary,cover_image,cover_alt,published_at,updated_at FROM blog_posts WHERE status='published' ORDER BY published_at DESC LIMIT 30").fetchall()
+        posts = db().execute("SELECT slug,title,summary,cover_image,cover_alt,published_at,updated_at,layout FROM blog_posts WHERE status='published' ORDER BY published_at DESC LIMIT 30").fetchall()
         return render_template("blog.html", posts=posts)
 
     @app.get("/blog/<slug>")
     def blog_post(slug):
         if slug == "como-funciona-guarda-aqui-adelinha":
             return redirect(url_for("blog_post", slug="como-funciona-me-guarde-ponto-de-coleta-adelinha"), code=301)
-        post = db().execute("SELECT slug,title,summary,body,cover_image,cover_alt,seo_title,seo_description,published_at,updated_at FROM blog_posts WHERE slug=? AND status='published'", (slug,)).fetchone()
+        post = db().execute("SELECT slug,title,summary,body,cover_image,cover_alt,seo_title,seo_description,published_at,updated_at,layout,toc_enabled FROM blog_posts WHERE slug=? AND status='published'", (slug,)).fetchone()
         if not post: abort(404)
-        return render_template("blog_post.html", post=post, formatted_body=format_blog_body(post["body"]))
+        return render_template("blog_post.html", post=post, **blog_tools.article_context(db(),post,format_blog_body))
 
     @app.get("/blog/<slug>/capa")
     def blog_cover(slug):
@@ -881,34 +882,42 @@ def create_app(test_config=None):
         mime = "image/png" if data.startswith(b"\x89PNG") else ("image/webp" if data.startswith(b"RIFF") else "image/jpeg")
         return Response(data, mimetype=mime, headers={"Cache-Control":"public, max-age=86400"})
 
+    def blog_editor(edit=None,status=200):
+        posts=db().execute("SELECT id,slug,title,status,updated_at FROM blog_posts ORDER BY updated_at DESC LIMIT 50").fetchall()
+        if edit is not None:
+            edit=dict(edit)
+            edit['body']=html.unescape(edit.get('body',''))
+        return render_template('blog_admin.html',posts=posts,edit=edit,**blog_tools.editor_context(db(),current_staff)),status
+
     @app.route("/painel/blog", methods=["GET", "POST"])
     @admin_required
     def blog_admin():
         if request.method == "POST":
-            title, slug = request.form.get("title", "").strip(), request.form.get("slug", "").strip().lower()
-            slug = re.sub(r"[^a-z0-9-]", "", slug)
-            status = "published" if request.form.get("action") == "publish" else "draft"
-            if not title or not slug:
-                flash("Título e endereço do artigo são obrigatórios.", "error")
-            else:
-                now_value = now().isoformat()
-                body = str(escape(request.form.get("body", "")))
-                upload = request.files.get("cover_image")
-                has_upload = bool(upload and upload.filename)
-                cover = upload.read(IMAGE_UPLOAD_MAX_BYTES + 1) if has_upload else None
-                if has_upload and not validated_image_type(cover, IMAGE_UPLOAD_MAX_BYTES):
-                    flash("A capa deve ser PNG, JPG ou WebP de até 900 KB. A imagem anterior foi preservada.", "error")
-                    return redirect(url_for("blog_admin"))
-                db().execute("""INSERT INTO blog_posts(slug,title,summary,body,cover_image,cover_alt,seo_title,seo_description,status,published_at,updated_at)
-                    VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(slug) DO UPDATE SET title=excluded.title,summary=excluded.summary,body=excluded.body,cover_image=COALESCE(excluded.cover_image,blog_posts.cover_image),
-                    cover_alt=excluded.cover_alt,seo_title=excluded.seo_title,seo_description=excluded.seo_description,status=excluded.status,
-                    published_at=COALESCE(blog_posts.published_at,excluded.published_at),updated_at=excluded.updated_at""",
-                    (slug,title,request.form.get("summary","").strip(),body,cover,request.form.get("cover_alt","").strip(),request.form.get("seo_title","").strip(),request.form.get("seo_description","").strip(),status,now_value if status=="published" else None,now_value))
-                db().commit(); flash("Artigo salvo com sucesso!", "success")
-                return redirect(url_for("blog_admin"))
-        posts = db().execute("SELECT id,slug,title,status,updated_at FROM blog_posts ORDER BY updated_at DESC LIMIT 50").fetchall()
-        edit = db().execute("SELECT slug,title,summary,body,cover_alt,seo_title,seo_description,status FROM blog_posts WHERE id=?", (request.args.get("edit"),)).fetchone() if request.args.get("edit") else None
-        return render_template("blog_admin.html", posts=posts, edit=edit)
+            title,slug=request.form.get('title','').strip(),request.form.get('slug','').strip().lower()
+            slug=re.sub(r'[^a-z0-9-]','',slug)
+            status='published' if request.form.get('action')=='publish' else 'draft'
+            body=str(escape(request.form.get('body','')))
+            layout=request.form.get('layout','legacy')
+            values={**request.form,'id':request.form.get('post_id'),'body':body,'layout':layout,'toc_enabled':int(request.form.get('toc_enabled')=='yes')}
+            if not title or not slug or not request.form.get('body','').strip() or layout not in ('legacy','icons'):
+                flash('Informe título, endereço, conteúdo e um modelo de artigo válido.','error');return blog_editor(values,400)
+            if request.form.get('post_id'):
+                original=db().execute('SELECT slug FROM blog_posts WHERE id=?',(request.form['post_id'],)).fetchone()
+                if not original or original['slug']!=slug:
+                    flash('O endereço de um artigo existente deve ser preservado. Reabra o artigo para editar.','error');return blog_editor(values,400)
+            upload=request.files.get('cover_image');has_upload=bool(upload and upload.filename)
+            cover=upload.read(IMAGE_UPLOAD_MAX_BYTES+1) if has_upload else None
+            if has_upload and not validated_image_type(cover,IMAGE_UPLOAD_MAX_BYTES):
+                flash('A capa deve ser PNG, JPG ou WebP de até 900 KB. A imagem anterior foi preservada.','error');return blog_editor(values,400)
+            now_value=now().isoformat()
+            db().execute("""INSERT INTO blog_posts(slug,title,summary,body,cover_image,cover_alt,seo_title,seo_description,status,published_at,updated_at,layout,toc_enabled)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(slug) DO UPDATE SET title=excluded.title,summary=excluded.summary,body=excluded.body,
+                cover_image=COALESCE(excluded.cover_image,blog_posts.cover_image),cover_alt=excluded.cover_alt,seo_title=excluded.seo_title,seo_description=excluded.seo_description,
+                status=excluded.status,published_at=COALESCE(blog_posts.published_at,excluded.published_at),updated_at=excluded.updated_at,layout=excluded.layout,toc_enabled=excluded.toc_enabled""",
+                (slug,title,request.form.get('summary','').strip(),body,cover,request.form.get('cover_alt','').strip(),request.form.get('seo_title','').strip(),request.form.get('seo_description','').strip(),status,now_value if status=='published' else None,now_value,layout,int(request.form.get('toc_enabled')=='yes')))
+            db().commit();flash('Artigo salvo com sucesso!','success');return redirect(url_for('blog_admin'))
+        edit=db().execute('SELECT id,slug,title,summary,body,cover_alt,seo_title,seo_description,status,layout,toc_enabled FROM blog_posts WHERE id=?',(request.args['edit'],)).fetchone() if request.args.get('edit') else None
+        return blog_editor(edit)
 
     @app.post("/painel/blog/<int:post_id>/despublicar")
     @admin_required
@@ -1849,6 +1858,7 @@ def create_app(test_config=None):
 
     with app.app_context():
         init_db(app.config["DATABASE"])
+    blog_tools.install(app,db,admin_required,current_staff,now,format_blog_body,validated_image_type)
     install_google_login(app, db, login_blocked, record_login)
     install_regularization(app, db, client_login_required, now, lambda *args: send_code(*args), residential_address_form, valid_residential_address, current_contract)
     client_actions.install(app, db, client_login_required, admin_required, current_staff, now, lambda *args: send_code(*args), lambda: (TERMS_VERSION,CONTRACT_LABEL,terms_text()))
@@ -1957,6 +1967,8 @@ def init_db(database):
     connection.execute("""CREATE TABLE IF NOT EXISTS google_login_pending (
         id_hash TEXT PRIMARY KEY, google_sub TEXT NOT NULL, email TEXT NOT NULL, client_id BIGINT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
         session_version INTEGER NOT NULL, expires_at BIGINT NOT NULL)""")
+    ensure_columns(connection,'blog_posts',{'layout':"TEXT NOT NULL DEFAULT 'legacy'",'toc_enabled':'INTEGER NOT NULL DEFAULT 0'})
+    blog_tools.schema(connection)
     columns = table_columns(connection, "clients")
     if "password_hash" not in columns:
         connection.execute("ALTER TABLE clients ADD COLUMN password_hash TEXT")

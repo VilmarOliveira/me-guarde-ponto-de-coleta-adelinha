@@ -129,3 +129,12 @@ NODE_PATH=/tmp/adelinha-browser/node_modules node tests/browser/acceptance_layou
 ```
 
 Verifica as sete larguras, ordem visual, checkbox verde com seleção pelo texto, toque/mouse, falha do provedor, sucesso com endereço oculto, envio/reenvio sem perda, código incorreto/expirado, checkbox obrigatório, gravação individual e histórico. O servidor de testes simula a passagem do tempo e o provedor; não há e-mails reais. Relatório em `/tmp/adelinha-acceptance-results`.
+
+Blog com ícones, conteúdo longo e acervo antigo:
+
+```bash
+.venv/bin/python tests/browser/serve_blog_icons.py
+NODE_PATH=/tmp/adelinha-browser/node_modules node tests/browser/blog_icons.cjs
+```
+
+O servidor usa banco temporário e integrações desativadas. Verifica as sete larguras, artigos com mais de 8.000 caracteres, equivalência da prévia, busca/inserção/troca/remoção de marcações, contadores, upload PNG/WebP, substituição, arquivamento que preserva artigos, índice, links, segurança e capas antigas. Relatório em `/tmp/adelinha-blog-results`.

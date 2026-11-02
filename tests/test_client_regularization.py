@@ -89,7 +89,8 @@ def test_missing_email_proof_is_explicit_and_confirmed_without_new_signature(acc
     assert 'Confirmação do contrato por código' in page.text
     assert 'Assinatura do contrato ausente' not in page.text
     result=send_and_confirm(account)
-    assert 'completo e válido' in result.text
+    assert 'Dados atualizados com sucesso.' in result.text
+    assert result.request.path=='/cliente/pendencias-e-autorizacoes'
     assert row(database)==before
     with sqlite3.connect(database) as db:
         assert db.execute('SELECT count(*) FROM client_contract_email_confirmations').fetchone()[0]==1
@@ -103,7 +104,8 @@ def test_absent_or_invalid_signature_requires_explicit_new_acceptance(account,in
     before=row(database)
     assert 'Assinatura' in client.get('/cliente').text
     result=send_and_confirm(account,signature())
-    assert 'completo e válido' in result.text
+    assert 'Dados atualizados com sucesso.' in result.text
+    assert result.request.path=='/cliente/pendencias-e-autorizacoes'
     assert row(database)==before
     with sqlite3.connect(database) as db:
         db.row_factory=sqlite3.Row
@@ -122,7 +124,8 @@ def test_missing_text_never_filled_from_current_version_automatically(account):
     site,_=account;client=site[1];database=site[2]
     mutate(database,"UPDATE clients SET terms_text=NULL,terms_version='legacy-v1',terms_display_label=NULL")
     result=send_and_confirm(account,signature())
-    assert 'completo e válido' in result.text
+    assert 'Dados atualizados com sucesso.' in result.text
+    assert result.request.path=='/cliente/pendencias-e-autorizacoes'
     assert row(database)['terms_text'] is None and row(database)['terms_version']=='legacy-v1'
     assert 'legacy-v1' in client.get('/cliente/contratos').text
 
@@ -135,7 +138,7 @@ def test_profile_regularization_keeps_identifier_packages_and_original_contract(
     with sqlite3.connect(database) as db:original_package=db.execute('SELECT * FROM packages').fetchone()
     data={k:before[k] or '' for k in ('phone','email','residential_cep','residential_street','residential_number','residential_district','residential_city','residential_state','residential_complement')}
     response=client.post('/cliente/pendencias',data={**data,'action':'profile','residential_street':'Rua corrigida','name':'Nome forjado','cpf':'123','csrf_token':csrf(client)},follow_redirects=True)
-    assert response.status_code==200 and 'completo e válido' in response.text
+    assert response.status_code==200 and 'dados cadastrais estão completos e válidos' in response.text
     after=row(database)
     for field in ('id','public_id','cpf','name','signature','terms_version','terms_text','accepted_at','contract_hash'):
         assert after[field]==before[field]
@@ -214,12 +217,13 @@ def test_profile_name_cpf_completion_archives_original_identification(account):
     before=row(database)
     values={key:before[key] or '' for key in ('phone','email','residential_cep','residential_street','residential_number','residential_district','residential_city','residential_state','residential_complement')}
     response=client.post('/cliente/pendencias',data={**values,'action':'profile','name':'Titular identificado','cpf':'52998224725','csrf_token':csrf(client)},follow_redirects=True)
-    assert response.status_code==200 and 'Identificação do titular no aceite' in response.text
+    assert response.status_code==200 and 'Identificação do titular no aceite' not in response.text
+    assert 'Identificação do titular no aceite' in client.get('/cliente/pendencias/contrato').text
     with sqlite3.connect(database) as db:
         archived=db.execute("SELECT name,cpf,signature,terms_version FROM client_contract_records WHERE source='legacy'").fetchone()
     assert archived==('', '00000000000',before['signature'],before['terms_version'])
     assert row(database)['public_id']==before['public_id']
-    assert 'completo e válido' in send_and_confirm(account,signature()).text
+    assert 'Dados atualizados com sucesso.' in send_and_confirm(account,signature()).text
     google_after_regularization(site)
 
 

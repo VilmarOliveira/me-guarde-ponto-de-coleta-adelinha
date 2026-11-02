@@ -3,6 +3,9 @@ import hashlib
 import hmac
 import json
 import secrets
+import sqlite3
+import psycopg
+from database import DatabaseIntegrityError
 from datetime import datetime
 from core import TZ
 from flask import Blueprint, abort, flash, redirect, render_template, request, session, url_for
@@ -102,7 +105,8 @@ def summary(db,owner,stamp):
         if item['is_contract'] and item['require_existing']:
             covered.update(('acceptance','confirmation'))
     unresolved=[item for item in missing if item['group'] not in covered]
-    return items,unresolved,len(pending)+int(bool(unresolved))
+    subjects={'profile' if item['group']=='profile' else 'contract' for item in unresolved}
+    return items,unresolved,len(pending)+len(subjects)
 
 
 def blockers(db,owner,stamp,include_baseline=False):
@@ -212,6 +216,7 @@ def install(app,db,client_required,admin_required,current_staff,now,send_code,de
         data['actions']=sorted(set(request.form.getlist('actions')))
         data['functions']=sorted(set(request.form.getlist('functions')))
         if not data['actions'] or any(x not in ACTIONS for x in data['actions']) or any(x not in FUNCTIONS for x in data['functions']):raise ValueError('Selecione ações e funções válidas.')
+        if 'profile' in data['actions'] and (data['is_contract'] or len(data['actions'])>1):raise ValueError('Separe os assuntos: publique a atualização de dados em uma solicitação própria, sem assinatura, termos ou outras autorizações.')
         if data['is_contract']:
             if not data['document_version'] or len(data['document_version'])>100:raise ValueError('Informe um código técnico exclusivo do contrato.')
             data['document_label']=data['document_label'] or data['title']
@@ -359,30 +364,50 @@ def install(app,db,client_required,admin_required,current_staff,now,send_code,de
         answer=item['answer']['id'] if item['answer'] else 0
         payload=f"{item['id']}:{item['content_hash']}:{person['id']}:{person['session_version']}:{person['email']}:{answer}"
         return hmac.new(app.secret_key.encode(),payload.encode(),hashlib.sha256).hexdigest()
+    def dependency(person,item):
+        if not (item['is_contract'] and item['require_existing']):return None
+        missing=[x for x in compliance(db(),person)[1] if x['group']=='profile']
+        if not missing:return None
+        pending=next((req for req in client_items(db(),person,stamp()) if req['id']!=item['id'] and req['actions']==['profile']),None)
+        return {'title':pending['title'] if pending else 'Dados cadastrais','missing':missing,
+                'href':url_for('client_actions.resolve',req_id=pending['id']) if pending else url_for('regularization.profile')}
     def render(person,item,status=200):
-        return render_template('actions_resolve.html',item=item,client=person,scope=token(person,item),profile_missing=any(x['group']=='profile' for x in compliance(db(),person)[1]),responses=db().execute('SELECT * FROM client_action_responses WHERE request_id=? AND client_id=? ORDER BY id',(item['id'],person['id'])).fetchall(),**choices()),status
+        return render_template('actions_resolve.html',item=item,client=person,scope=token(person,item),dependency=dependency(person,item),profile_missing=any(x['group']=='profile' for x in compliance(db(),person)[1]),submitted_signature=signature_data(request.form.get('signature','')) if request.method=='POST' else None,confirmed=request.method=='POST' and request.form.get('confirmed')=='yes',responses=db().execute('SELECT * FROM client_action_responses WHERE request_id=? AND client_id=? ORDER BY id',(item['id'],person['id'])).fetchall(),**choices()),status
 
     @bp.route('/cliente/pendencias-e-autorizacoes/<int:req_id>',methods=['GET','POST'])
     @client_required
     def resolve(req_id):
+        try:return resolve_request(req_id)
+        except (DatabaseIntegrityError,sqlite3.DatabaseError,psycopg.Error):
+            db().rollback()
+            if request.method!='POST':raise
+            person,item=client_request(req_id)
+            flash('Não foi possível salvar os dados. Nenhum aceite foi concluído. Tente novamente.','error')
+            return render(person,item,503)
+
+    def resolve_request(req_id):
         person,item=client_request(req_id)
         if request.method=='GET':return render(person,item)
         if session.get('staff'):abort(403)
         if item['status']!='published' or item['state'] in ('completed','cancelled'):abort(409)
-        choice=request.form.get('choice','')
+        choice='send_code' if request.form.get('email_intent')=='send_code' else request.form.get('choice','')
         if item['answer'] and not (item['is_contract'] and item['require_existing'] and item['state']=='pending') and not (item['kind']=='optional' and item['state']=='accepted' and choice=='revoke'):return redirect(url_for('client_actions.resolve',req_id=req_id))
         if request.form.get('scope')!=token(person,item):flash('A solicitação ou o cadastro mudou. Recarregue antes de responder.','error');return render(person,item,409)
         refusal=item['kind']=='optional' and choice in ('decline','revoke')
+        if choice in ('send_code','accept') and dependency(person,item):
+            flash('Resolva primeiro a pendência de dados cadastrais indicada abaixo.','error');return render(person,item,400)
         if choice=='send_code':
             if 'email' not in item['actions'] or not valid_email(person['email']):flash('Atualize seu e-mail antes de solicitar o código.','error');return render(person,item,400)
-            status,message=issue_email(db(),app.secret_key,person,token(person,item),send_code);flash(message,'success' if status==200 else 'error');return render(person,item,status)
+            status,message=issue_email(db(),app.secret_key,person,token(person,item),send_code)
+            if request.headers.get('X-Requested-With')=='XMLHttpRequest':return {'sent':status==200,'message':message},status
+            flash(message,'success' if status==200 else 'error');return render(person,item,status)
         if not refusal:
             if choice!='accept' or request.form.get('confirmed')!='yes':flash('Confirme expressamente a ação indicada.','error');return render(person,item,400)
             if 'profile' in item['actions']:
                 audit=db().execute("SELECT id FROM audit_logs WHERE entity_type='cliente' AND entity_id=? AND action='editar_proprio_cadastro' AND created_at>=? ORDER BY id DESC LIMIT 1",(person['id'],max(item['published_at'],item['starts_at'],item['assignment']['assigned_at']))).fetchone()
                 if not audit or any(x['group']=='profile' for x in compliance(db(),person)[1]):flash('Revise e salve seus dados antes de concluir.','error');return render(person,item,400)
             if 'signature' in item['actions'] and not signature_data(request.form.get('signature','')):flash('Assine no espaço indicado.','error');return render(person,item,400)
-            if item['is_contract'] and any(x['group']=='profile' for x in compliance(db(),person)[1]):flash('Complete os dados do cadastro antes do novo aceite.','error');return render(person,item,400)
+            if item['is_contract'] and item['require_existing'] and any(x['group']=='profile' for x in compliance(db(),person)[1]):flash('Complete os dados do cadastro antes do novo aceite.','error');return render(person,item,400)
         db().commit();db().begin_write()
         # Serialize cancellation/version publication and duplicate client submits.
         locked=db().execute('SELECT status FROM client_action_requests WHERE id=?'+(' FOR UPDATE' if db().postgres else ''),(req_id,)).fetchone()
@@ -409,6 +434,6 @@ def install(app,db,client_required,admin_required,current_staff,now,send_code,de
         db().execute('''INSERT INTO client_action_responses(request_id,client_id,request_version,title,explanation,body,content_hash,actions_json,response,status,responded_at,signature,email,email_confirmed_at,contract_record_id,profile_audit_id,accept_ip,accept_user_agent)
             VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',(req_id,person['id'],item['version'],item['title'],item['explanation'],item['body'],item['content_hash'],item['actions_json'],choice,state,value,signature,fresh['email'] if email_at else None,email_at,record_id,profile_audit,request.remote_addr,request.headers.get('User-Agent','')[:500]))
         if email_at:db().execute('DELETE FROM client_regularization_codes WHERE client_id=?',(person['id'],))
-        db().commit();flash('Resposta registrada. O histórico foi preservado.','success');return redirect(url_for('client_actions.hub'))
+        db().commit();flash('Dados atualizados com sucesso.' if not refusal else 'Resposta registrada. O histórico foi preservado.','success');return redirect(url_for('client_actions.hub'))
 
     app.register_blueprint(bp)

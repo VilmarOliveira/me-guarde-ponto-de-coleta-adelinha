@@ -182,7 +182,8 @@ def test_regularization_append_only_records_and_email_proof_postgresql(monkeypat
         data={'action':'confirm','scope':scope,'terms_accept':'yes','code':captured['code'],'csrf_token':csrf(client)}
         if new_signature:data['signature']=new_signature
         result=client.post('/cliente/pendencias',data=data,follow_redirects=True)
-        assert result.status_code==200 and 'completo e válido' in result.text
+        assert result.status_code==200 and 'Dados atualizados com sucesso.' in result.text
+        assert result.request.path=='/cliente/pendencias-e-autorizacoes'
     complete()
     assert connection.execute('SELECT count(*) n FROM client_contract_email_confirmations WHERE client_id=?',(source['id'],)).fetchone()['n']==1
     assert connection.execute('SELECT confirmation_validated_at FROM clients WHERE id=?',(source['id'],)).fetchone()['confirmation_validated_at'] is None

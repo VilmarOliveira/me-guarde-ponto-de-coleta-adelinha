@@ -73,7 +73,9 @@ document.querySelectorAll('[data-signature-form]').forEach((form) => {
     moved = false;
     hidden.value = '';
   });
+  if (form.hasAttribute('data-restore-signature') && hidden.value) form.restoreSignature(hidden.value);
   form.addEventListener('submit', (event) => {
+    if (event.submitter?.matches('[data-send-email]')) return;
     if (!moved) {
       event.preventDefault();
       alert('Faça sua assinatura antes de continuar.');
@@ -761,19 +763,38 @@ if (cardDialog && typeof cardDialog.showModal === 'function') {
 }
 
 // Requesting another email code must not clear a signature already drawn.
-document.querySelectorAll('[data-regularization-email]').forEach(form => {
+document.querySelectorAll('[data-regularization-email], [data-email-in-place]').forEach(form => {
+  // Enter in the received code saves the form rather than sending another code.
+  form.addEventListener('keydown', event => {
+    if (event.key === 'Enter' && event.target.name === 'code' && form.hasAttribute('data-email-in-place')) {
+      event.preventDefault();
+      form.requestSubmit(form.querySelector('button.primary[type=submit]'));
+    }
+  });
   form.addEventListener('submit', async event => {
+    if (form.hasAttribute('data-email-in-place') && !event.submitter?.matches('[data-send-email]')) return;
     event.preventDefault();
-    const button = form.querySelector('button');
+    const button = event.submitter || form.querySelector('button');
     const status = form.querySelector('[data-email-status]');
+    if (button.disabled) return;
     button.disabled = true;
+    status.className = 'email-status';
     status.textContent = 'Enviando código…';
+    const body = new FormData(form);
+    if (form.hasAttribute('data-email-in-place')) {
+      body.set(form.dataset.emailField, 'send_code');
+      // Email delivery does not submit an acceptance or store the drawn signature.
+      ['signature', 'confirmed', 'terms_accept', 'code', 'email_intent'].forEach(key => body.delete(key));
+    }
     try {
-      const response = await fetch(form.getAttribute('action') || location.href, {method:'POST',body:new FormData(form),credentials:'same-origin'});
-      const page = new DOMParser().parseFromString(await response.text(), 'text/html');
-      const messages = [...page.querySelectorAll('.flash')].map(node => node.textContent.trim());
-      status.textContent = messages.join(' ') || (response.ok ? 'Confira seu e-mail.' : 'Não foi possível enviar o código. Tente novamente.');
-    } catch (_) { status.textContent = 'Não foi possível enviar o código. Confira a conexão e tente novamente.'; }
-    finally { button.disabled = false; }
+      const response = await fetch(form.getAttribute('action') || location.href, {method:'POST',body,credentials:'same-origin',headers:{'X-Requested-With':'XMLHttpRequest','Accept':'application/json'}});
+      const result = response.headers.get('content-type')?.includes('application/json') ? await response.json() : null;
+      const sent = response.ok && result?.sent === true;
+      status.textContent = result?.message || 'Não foi possível enviar o código. Confira sua sessão e tente novamente.';
+      status.classList.add(sent ? 'success' : 'error');
+    } catch (_) {
+      status.textContent = 'Não foi possível enviar o código. Confira a conexão e tente novamente.';
+      status.classList.add('error');
+    } finally { button.disabled = false; }
   });
 });

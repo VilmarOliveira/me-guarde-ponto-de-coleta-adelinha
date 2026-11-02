@@ -120,3 +120,12 @@ NODE_PATH=/tmp/adelinha-browser/node_modules node tests/browser/contract_reaccep
 ```
 
 Publica um contrato informativo, ativa depois a exigência do texto já vigente e verifica clientes antigos por senha/Google, título visual idêntico com revisão diferente, assinatura e código, histórico e repetição sem duplicidade em 320, 390, 768 e 1440 px. Relatório em `/tmp/adelinha-reaccept-results`.
+
+Organização da Área do Cliente e formulário de aceite (servidor isolado próprio):
+
+```bash
+.venv/bin/python tests/browser/serve_acceptance_layout.py
+NODE_PATH=/tmp/adelinha-browser/node_modules node tests/browser/acceptance_layout.cjs
+```
+
+Verifica as sete larguras, ordem visual, checkbox verde com seleção pelo texto, toque/mouse, falha do provedor, sucesso com endereço oculto, envio/reenvio sem perda, código incorreto/expirado, checkbox obrigatório, gravação individual e histórico. O servidor de testes simula a passagem do tempo e o provedor; não há e-mails reais. Relatório em `/tmp/adelinha-acceptance-results`.

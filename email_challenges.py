@@ -28,7 +28,8 @@ def issue(db,secret,owner,scope,send_code):
     if not sent:
         db.execute('UPDATE client_regularization_codes SET expires_at=0 WHERE client_id=? AND scope_hash=?',(owner['id'],scope));db.commit()
         return 503,'Envio de e-mail indisponível. Nenhum aceite ou confirmação foi registrado. Tente novamente mais tarde.'
-    return 200,'Código enviado ao seu e-mail. Ele expira em 10 minutos.'
+    local,domain=owner['email'].split('@',1)
+    return 200,f'Código enviado com sucesso para o e-mail {local[:2]}***@{domain}.'
 
 
 def verify(db,secret,owner,scope,code):

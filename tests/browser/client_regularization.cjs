@@ -30,9 +30,9 @@ try{for(const width of [320,390,768,1440])for(const scenario of ['active','legac
   await page.getByRole('button',{name:'Enviar código por e-mail'}).click();await page.locator('[data-email-status]').filter({hasText:'Código enviado'}).waitFor();
   if(signatureBefore)assert.equal(await page.locator('[name=signature]').inputValue(),signatureBefore);
   const response=await page.request.get(BASE+'/__google/current-code');const {code}=await response.json();assert(code);
-  await page.locator('[name=terms_accept]').check();await page.locator('[name=code]').fill(code);await page.getByRole('button',{name:/concluir regularização/}).click();
+  await page.locator('[name=terms_accept]').check();await page.locator('[name=code]').fill(code);await page.getByRole('button',{name:'SALVAR DADOS'}).click();
  }
- await page.getByText('Seu cadastro está completo e válido',{exact:false}).waitFor();
+ if(scenario==='signature'||scenario==='confirmation')await page.getByText('Dados atualizados com sucesso.',{exact:true}).waitFor();else if(scenario==='profile')await page.getByText('Seus dados cadastrais estão completos e válidos.',{exact:true}).waitFor();else await page.getByText('Seu cadastro está completo e válido',{exact:false}).waitFor();
  await page.screenshot({path:`/tmp/adelinha-compliance-results/${scenario}-${width}.png`});
  csrf=await page.locator('meta[name=csrf-token]').getAttribute('content');await page.request.post(BASE+'/cliente/sair',{form:{csrf_token:csrf}});await page.goto(BASE+'/cliente/login');
  await page.getByRole('button',{name:'Fazer Login com o Google'}).click();await page.getByRole('link',{name:'Concluir Google simulado'}).click();

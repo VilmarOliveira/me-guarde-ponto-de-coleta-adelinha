@@ -237,3 +237,16 @@
 
 /* Immutable revision identifiers must fit even at 320 px. */
 .contract-revision { overflow-wrap: anywhere; word-break: break-word; }
+
+/* Consent controls retain a stable hit area and alignment on narrow screens. */
+form .acceptance-check { display:flex; align-items:flex-start; gap:12px; min-height:44px; margin:20px 0; line-height:1.5; cursor:pointer; }
+.acceptance-check input[type=checkbox] { appearance:none; -webkit-appearance:none; display:grid; place-content:center; flex:0 0 24px; width:24px; height:24px; padding:0; margin:0; border:2px solid #52645b; border-radius:5px; background:#fff; }
+.acceptance-check input[type=checkbox]:checked { background:#167348; border-color:#167348; }
+.acceptance-check input[type=checkbox]:checked::after { content:''; width:11px; height:6px; border:solid white; border-width:0 0 3px 3px; transform:rotate(-45deg); margin-top:-3px; }
+.acceptance-check span { flex:1; min-width:0; }
+.acceptance-form > .clear-signature { margin-top:10px; }
+.email-status { margin:12px 0; overflow-wrap:anywhere; }
+.email-status:empty { margin:0; }
+.email-status.success { color:#116843; background:#def5e9; padding:12px; border-radius:9px; }
+.email-status.error { color:#9a2416; background:#fee7e3; padding:12px; border-radius:9px; }
+@media (forced-colors: active) { .acceptance-check input[type=checkbox] { appearance:auto; } }

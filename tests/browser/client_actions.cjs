@@ -16,7 +16,7 @@ const results=[];fs.mkdirSync('/tmp/adelinha-actions-results',{recursive:true});
   const signature=await page.locator('[name=signature]').inputValue();assert(signature.startsWith('data:image/png;base64,'));
   await page.setViewportSize({width:width<768?768:390,height:900});assert.equal(await page.locator('[name=signature]').inputValue(),signature);await page.setViewportSize({width,height:900});
   await page.getByRole('button',{name:'Enviar código por e-mail'}).click();await page.locator('[data-email-status]').filter({hasText:'Código enviado'}).waitFor();assert.equal(await page.locator('[name=signature]').inputValue(),signature);
-  const {code}=await (await page.request.get(BASE+'/__google/current-code')).json();await page.locator('[name=code]').fill(code);await page.locator('[name=confirmed]').check();await page.getByRole('button',{name:'Concluir ação',exact:true}).click();await page.waitForURL(HUB);
+  const {code}=await (await page.request.get(BASE+'/__google/current-code')).json();await page.locator('[name=code]').fill(code);await page.locator('[name=confirmed]').check();await page.getByRole('button',{name:'SALVAR DADOS',exact:true}).click();await page.waitForURL(HUB);
   assert.equal((await page.request.get(BASE+'/cliente/dados-de-entrega')).status(),200);
   await page.goto(HUB+'/'+mandatory);assert(await page.getByRole('heading',{name:'Seu histórico nesta solicitação'}).count());assert(await page.locator('.saved-signature').count());assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
   await page.screenshot({path:`/tmp/adelinha-actions-results/client-${width}.png`});

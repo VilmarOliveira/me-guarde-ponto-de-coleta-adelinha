@@ -138,3 +138,12 @@ NODE_PATH=/tmp/adelinha-browser/node_modules node tests/browser/blog_icons.cjs
 ```
 
 O servidor usa banco temporário e integrações desativadas. Verifica as sete larguras, artigos com mais de 8.000 caracteres, equivalência da prévia, busca/inserção/troca/remoção de marcações, contadores, upload PNG/WebP, substituição, arquivamento que preserva artigos, índice, links, segurança e capas antigas. Relatório em `/tmp/adelinha-blog-results`.
+
+Capa opcional nos dois modelos do blog:
+
+```bash
+.venv/bin/python tests/browser/serve_blog_covers.py
+NODE_PATH=/tmp/adelinha-browser/node_modules node tests/browser/blog_covers.cjs
+```
+
+O servidor é isolado, com banco e imagens fictícios. Verifica as sete larguras, PNG/JPG/WebP, imagem completa horizontal/vertical, prévia, descrição acessível, substituição, rejeição com preservação da capa anterior, remoção e artigo sem capa, mantendo conteúdo e SEO. Relatório em `/tmp/adelinha-blog-cover-results`.

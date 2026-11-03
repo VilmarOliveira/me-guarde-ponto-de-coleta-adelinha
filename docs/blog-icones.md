@@ -3,7 +3,7 @@
 ## Preparar, colar e publicar
 
 1. Abra **Área do Ponto → Configurações → Editor do blog** (`/painel/blog`). A edição/publicação conserva as permissões existentes.
-2. Em um artigo novo, o modelo selecionado é **Texto com ícones — sem fotos ou banners**. Preencha título e introdução/resumo, depois cole o artigo completo no corpo.
+2. Em um artigo novo, o modelo selecionado é **Texto com ícones — capa opcional**. Preencha título e introdução/resumo, depois cole o artigo completo no corpo.
 3. Use as marcações no começo da linha, sem espaços antes do colchete:
 
    ```text
@@ -63,7 +63,7 @@ Confira a prévia antes de **Salvar ícone**. Para substituir, use o mesmo ident
 
 ## Acervo, persistência e implantação
 
-Artigos existentes recebem apenas configurações aditivas: `layout='legacy'` e `toc_enabled=0`. Seus textos, slugs, metadados, datas e imagens não são regravados ou convertidos automaticamente. O modelo anterior continua mostrando as capas; para mudar um artigo, o administrador escolhe explicitamente o novo modelo e salva. A imagem anterior permanece no banco, mesmo quando o novo modelo a deixa de exibir.
+Artigos existentes recebem apenas configurações aditivas: `layout='legacy'` e `toc_enabled=0`. Seus textos, slugs, metadados, datas e imagens não são regravados ou convertidos automaticamente. As capas já cadastradas são reaproveitadas nos dois modelos e aparecem acima do título e na listagem. Para mudar a formatação do artigo, o administrador escolhe explicitamente o modelo e salva. A capa só é substituída por um novo envio válido ou removida pela opção explícita de remoção. Consulte [Capa opcional no blog](blog-capa-opcional.md).
 
 `blog_icon_assets` guarda os arquivos e seus tipos reais; `blog_icons` guarda nome, identificador, versão atual e estado na biblioteca. O banco SQLite/PostgreSQL persistente usado pela instalação conserva essas informações após reinicializações e atualizações. A inicialização cria as tabelas/colunas de modo aditivo. A ferramenta existente de migração SQLite → PostgreSQL também inclui os arquivos e o catálogo, na ordem das dependências.
 
@@ -73,6 +73,6 @@ Não há novas dependências, serviços pagos, credenciais ou variáveis Oracle.
 
 - **233 testes aprovados com SQLite**, incluindo artigos com mais de 8.000 e 50.000 caracteres, acentos, listas, links, marcações só no início da linha, títulos repetidos, índice opcional, equivalência prévia/publicação, metadados SEO, HTML malicioso e protocolos inseguros.
 - **Dez testes aprovados em PostgreSQL isolado**, incluindo publicação, armazenamento dos ícones, arquivamento, persistência após recriar a aplicação e transferência real de SQLite para PostgreSQL.
-- Chromium em **320, 360, 390, 430, 768, 1024 e 1440 px**: colar artigo longo, buscar/inserir/trocar/remover ícones, avisos, contadores, upload real PNG/WebP com prévia, rejeição de arquivo falso, substituição, arquivamento sem quebrar artigos, prévia com Esc, índice recolhível e links, texto contínuo, ausência de fotos no novo modelo e compatibilidade com capa antiga. Sem rolagem horizontal e sem execução do script usado como texto de teste.
+- Chromium em **320, 360, 390, 430, 768, 1024 e 1440 px**: colar artigo longo, buscar/inserir/trocar/remover ícones, avisos, contadores, upload real PNG/WebP com prévia, rejeição de arquivo falso, substituição, arquivamento sem quebrar artigos, prévia com Esc, índice recolhível e links, texto contínuo, artigos sem capa e compatibilidade com capa antiga. Sem rolagem horizontal e sem execução do script usado como texto de teste.
 
 Relatório/capturas: `/tmp/adelinha-blog-results`. As verificações de navegador usam emulação de computador/celular; não acessam a Oracle. Não havia imagens de referência dentro do texto enviado; a implementação segue as diretrizes de layout descritas nesse texto.

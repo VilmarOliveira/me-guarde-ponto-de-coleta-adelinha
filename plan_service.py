@@ -91,6 +91,15 @@ def schema(db, id_type):
         qr_text TEXT,expires_at TEXT,settlement_state TEXT,card_brand TEXT,card_last4 TEXT,
         rules_version TEXT NOT NULL,rules_text TEXT NOT NULL,accepted_at TEXT NOT NULL)"""
     )
+    db.execute("""CREATE TABLE IF NOT EXISTS plan_admin_decisions (
+        id TEXT PRIMARY KEY,order_id TEXT NOT NULL REFERENCES plan_orders(id),
+        client_id BIGINT NOT NULL REFERENCES clients(id),action TEXT NOT NULL,
+        actor_id BIGINT REFERENCES staff_users(id),actor_key TEXT NOT NULL,actor_name TEXT NOT NULL,
+        reason TEXT NOT NULL,created_at TEXT NOT NULL,previous_state TEXT NOT NULL,final_state TEXT NOT NULL,
+        UNIQUE(order_id,action))""")
+    db.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_plan_one_entitlement_order ON plan_orders(client_id,cycle_key) WHERE state IN ('creating','uncertain','pending','approved','under_review','paid','manual_approved')"
+    )
     db.execute(
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_plan_one_open_order ON plan_orders(client_id,cycle_key) WHERE state IN ('creating','uncertain','pending','approved','under_review','paid')"
     )
@@ -196,6 +205,17 @@ def grant_due(db, client_id, value):
             )
 
 
+def next_cycle_key(db, client_id, value):
+    current, _, _ = cycles(db, client_id, value)
+    if current:
+        return "after:" + current["id"]
+    previous = db.execute(
+        "SELECT id FROM plan_cycles WHERE client_id=? ORDER BY ends_at DESC LIMIT 1",
+        (client_id,),
+    ).fetchone()
+    return "restart:" + previous["id"] if previous else "activation"
+
+
 def reserve_order(db, owner, method, value, settings):
     db.commit()
     db.begin_write()
@@ -203,25 +223,19 @@ def reserve_order(db, owner, method, value, settings):
     current, future, _ = cycles(db, owner["id"], value)
     if future and not future["suspended"]:
         db.commit()
-        return None, "O próximo ciclo já está pago. Nenhuma nova cobrança foi criada."
+        return (
+            None,
+            "O próximo ciclo já está confirmado. Nenhuma nova cobrança foi criada.",
+        )
     if current and current["suspended"]:
         db.commit()
         return (
             None,
             "Há um pagamento em revisão administrativa. Seus pacotes recebidos continuam disponíveis para retirada.",
         )
-    key = "after:" + current["id"] if current else "activation"
-    # Expired first attempts may leave a paid activation order: a fresh period
-    # must use a key anchored to the most recently expired cycle.
-    if not current:
-        previous = db.execute(
-            "SELECT id FROM plan_cycles WHERE client_id=? ORDER BY ends_at DESC LIMIT 1",
-            (owner["id"],),
-        ).fetchone()
-        if previous:
-            key = "restart:" + previous["id"]
+    key = next_cycle_key(db, owner["id"], value)
     old = db.execute(
-        "SELECT * FROM plan_orders WHERE client_id=? AND cycle_key=? AND state IN ('creating','uncertain','pending','approved','under_review','paid') ORDER BY created_at DESC LIMIT 1",
+        "SELECT * FROM plan_orders WHERE client_id=? AND cycle_key=? AND state IN ('creating','uncertain','pending','approved','under_review','paid','manual_approved') ORDER BY created_at DESC LIMIT 1",
         (owner["id"], key),
     ).fetchone()
     if old:
@@ -233,7 +247,7 @@ def reserve_order(db, owner, method, value, settings):
     ).fetchone()
     # Four creation attempts/minute is the provider's documented global cap.
     recent = db.execute(
-        "SELECT COUNT(*) n FROM plan_orders WHERE created_at>?",
+        "SELECT COUNT(*) n FROM plan_orders WHERE created_at>? AND method!='administrative'",
         (iso(value - timedelta(minutes=1)),),
     ).fetchone()["n"]
     if recent >= 4:
@@ -339,6 +353,37 @@ def safe_time(value):
         return None
 
 
+def activate_order(db, order, value):
+    order_id = order["id"]
+    duplicate = db.execute(
+        "SELECT id FROM plan_orders WHERE client_id=? AND cycle_key=? AND state IN ('paid','manual_approved') AND id!=?",
+        (order["client_id"], order["cycle_key"], order_id),
+    ).fetchone()
+    if duplicate:
+        db.rollback()
+        raise GatewayError(
+            "Mais de um pagamento para a mesma contratação; consulte o atendimento.",
+            code="duplicate_remote",
+        )
+    current, future, _ = cycles(db, order["client_id"], value)
+    if (future and not future["suspended"]) or (current and current["suspended"]):
+        db.rollback()
+        raise GatewayError(
+            "Há mais de um pagamento para o próximo ciclo. Tratamento administrativo necessário.",
+            code="duplicate_remote",
+        )
+    # Confirmed late payment never backdates a cycle over received parcels.
+    start = parse(current["ends_at"]) if current and not current["suspended"] else value
+    anchor = current["anchor_day"] if current else value.day
+    end = month_after(start, anchor)
+    cid = str(uuid.uuid4())
+    db.execute(
+        "INSERT INTO plan_cycles(id,order_id,client_id,starts_at,ends_at,anchor_day) VALUES(?,?,?,?,?,?)",
+        (cid, order_id, order["client_id"], iso(start), iso(end), anchor),
+    )
+    grant_due(db, order["client_id"], value)
+
+
 def apply_transaction(db, order_id, data, value):
     original = db.execute(
         "SELECT * FROM plan_orders WHERE id=?", (order_id,)
@@ -397,7 +442,7 @@ def apply_transaction(db, order_id, data, value):
         else None
     )
     db.execute(
-        """UPDATE plan_orders SET transaction_id=?,checked_at=?,check_after=?,qr_text=COALESCE(?,qr_text),expires_at=COALESCE(?,expires_at),settlement_state=?,card_brand=?,card_last4=?,error_code=NULL WHERE id=?""",
+        """UPDATE plan_orders SET transaction_id=?,checked_at=?,check_after=?,qr_text=COALESCE(?,qr_text),expires_at=COALESCE(?,expires_at),settlement_state=?,card_brand=?,card_last4=?,error_code=CASE WHEN state='admin_cancelled' THEN error_code ELSE NULL END WHERE id=?""",
         (
             tid,
             iso(value),
@@ -413,6 +458,23 @@ def apply_transaction(db, order_id, data, value):
     cycle = db.execute(
         "SELECT * FROM plan_cycles WHERE order_id=?", (order_id,)
     ).fetchone()
+    manual_approval = db.execute(
+        "SELECT 1 FROM plan_admin_decisions WHERE order_id=? AND action='approve'",
+        (order_id,),
+    ).fetchone()
+    if order["state"] == "admin_cancelled":
+        if state == "paid":
+            db.execute(
+                "UPDATE plan_orders SET paid_at=COALESCE(paid_at,?),error_code='payment_after_cancellation' WHERE id=?",
+                (iso(value), order_id),
+            )
+        elif state == "refunded":
+            db.execute(
+                "UPDATE plan_orders SET refunded_at=COALESCE(refunded_at,?) WHERE id=?",
+                (iso(value), order_id),
+            )
+        db.commit()
+        return
     if state == "refunded":
         db.execute(
             "UPDATE plan_orders SET state='refunded',refunded_at=COALESCE(refunded_at,?) WHERE id=?",
@@ -431,46 +493,23 @@ def apply_transaction(db, order_id, data, value):
             )
     elif cycle:
         if state == "paid":
-            db.execute("UPDATE plan_orders SET state='paid' WHERE id=?", (order_id,))
-        elif state not in ("pending", "approved"):
+            db.execute(
+                "UPDATE plan_orders SET state='paid',paid_at=COALESCE(paid_at,?) WHERE id=?",
+                (iso(value), order_id),
+            )
+        elif state not in ("pending", "approved") and (
+            not manual_approval or order["paid_at"]
+        ):
             db.execute(
                 "UPDATE plan_cycles SET suspended=1,review_required=1 WHERE id=?",
                 (cycle["id"],),
             )
     elif state == "paid":
-        duplicate = db.execute(
-            "SELECT id FROM plan_orders WHERE client_id=? AND cycle_key=? AND state='paid' AND id!=?",
-            (order["client_id"], order["cycle_key"], order_id),
-        ).fetchone()
-        if duplicate:
-            db.rollback()
-            raise GatewayError(
-                "Mais de um pagamento para a mesma contratação; consulte o atendimento.",
-                code="duplicate_remote",
-            )
-        current, future, _ = cycles(db, order["client_id"], value)
-        if (future and not future["suspended"]) or (current and current["suspended"]):
-            db.rollback()
-            raise GatewayError(
-                "Há mais de um pagamento para o próximo ciclo. Tratamento administrativo necessário.",
-                code="duplicate_remote",
-            )
-        # Confirmed late payment never backdates a cycle over received parcels.
-        start = (
-            parse(current["ends_at"]) if current and not current["suspended"] else value
-        )
-        anchor = current["anchor_day"] if current else value.day
-        end = month_after(start, anchor)
-        cid = str(uuid.uuid4())
-        db.execute(
-            "INSERT INTO plan_cycles(id,order_id,client_id,starts_at,ends_at,anchor_day) VALUES(?,?,?,?,?,?)",
-            (cid, order_id, order["client_id"], iso(start), iso(end), anchor),
-        )
+        activate_order(db, order, value)
         db.execute(
             "UPDATE plan_orders SET state='paid',paid_at=? WHERE id=?",
             (iso(value), order_id),
         )
-        grant_due(db, order["client_id"], value)
     else:
         db.execute("UPDATE plan_orders SET state=? WHERE id=?", (state, order_id))
     db.commit()

@@ -16,7 +16,7 @@ TABLES = (
     "login_attempts", "audit_logs", "settings", "blog_posts", "blog_icon_assets", "blog_icons", "verification_codes",
     "reminder_logs", "site_banners", "site_photos", "site_themes", "staff_users",
     "staff_recovery_codes", "id_sequences", "analytics_events",
-    "plan_api_budget", "plan_accounts", "plan_orders", "plan_cycles", "plan_credit_ledger", "plan_payment_events", "plan_reminders",
+    "plan_api_budget", "plan_accounts", "plan_orders", "plan_cycles", "plan_credit_ledger", "plan_payment_events", "plan_reminders", "plan_admin_decisions",
 )
 
 

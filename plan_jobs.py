@@ -10,13 +10,16 @@ import plan_routes
 
 def reconcile(db, config, value, limit=12):
     app = SimpleNamespace(config=config)
-    if not Settings.from_config(config).ready:
-        return 0
+    ready = Settings.from_config(config).ready
     count = 0
-    pending = db.execute(
-        "SELECT * FROM plan_payment_events WHERE outcome='pending' ORDER BY id LIMIT ?",
-        (min(limit, 4),),
-    ).fetchall()
+    pending = (
+        db.execute(
+            "SELECT * FROM plan_payment_events WHERE outcome='pending' ORDER BY id LIMIT ?",
+            (min(limit, 4),),
+        ).fetchall()
+        if ready
+        else []
+    )
     for event in pending:
         try:
             data = plan_routes.gateway(app).get(event["transaction_id"])
@@ -45,13 +48,17 @@ def reconcile(db, config, value, limit=12):
                 )
             db.commit()
     # Paid orders are also rechecked periodically to recover missed refunds.
-    rows = db.execute(
-        """SELECT id FROM plan_orders WHERE
+    rows = (
+        db.execute(
+            """SELECT id FROM plan_orders WHERE
         (state IN ('creating','uncertain','pending','approved','under_review') AND (check_after IS NULL OR check_after<=?))
-        OR (state='paid' AND (checked_at IS NULL OR checked_at<?))
+        OR (state IN ('paid','manual_approved','admin_cancelled') AND method!='administrative' AND (checked_at IS NULL OR checked_at<?))
         ORDER BY COALESCE(checked_at,''),created_at LIMIT ?""",
-        (service.iso(value), service.iso(value - timedelta(hours=6)), limit),
-    ).fetchall()
+            (service.iso(value), service.iso(value - timedelta(hours=6)), limit),
+        ).fetchall()
+        if ready
+        else []
+    )
     for row in rows:
         count += int(plan_routes.refresh(db, app, row["id"], value))
     for account in db.execute(
@@ -89,7 +96,7 @@ def reminders(db, config, value, send_email):
         db.begin_write()
         service.lock_account(db, row["client_id"], value)
         renewed = db.execute(
-            "SELECT 1 FROM plan_cycles p JOIN plan_orders o ON o.id=p.order_id WHERE p.client_id=? AND p.starts_at>=? AND p.id!=? AND p.suspended=0 AND o.state='paid'",
+            "SELECT 1 FROM plan_cycles p JOIN plan_orders o ON o.id=p.order_id WHERE p.client_id=? AND p.starts_at>=? AND p.id!=? AND p.suspended=0 AND o.state IN ('paid','manual_approved')",
             (row["client_id"], row["ends_at"], row["id"]),
         ).fetchone()
         latest = db.execute(
@@ -109,7 +116,7 @@ def reminders(db, config, value, send_email):
         db.begin_write()
         service.lock_account(db, row["client_id"], value)
         renewed = db.execute(
-            "SELECT 1 FROM plan_cycles p JOIN plan_orders o ON o.id=p.order_id WHERE p.client_id=? AND p.starts_at>=? AND p.id!=? AND p.suspended=0 AND o.state='paid'",
+            "SELECT 1 FROM plan_cycles p JOIN plan_orders o ON o.id=p.order_id WHERE p.client_id=? AND p.starts_at>=? AND p.id!=? AND p.suspended=0 AND o.state IN ('paid','manual_approved')",
             (row["client_id"], row["ends_at"], row["id"]),
         ).fetchone()
         if renewed:

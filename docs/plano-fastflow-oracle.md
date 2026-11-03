@@ -2,6 +2,8 @@
 
 Implementação de 3 de novembro de 2026. **Atualização da oferta: somente Pix para contratar/renovar. O checkout Card In está desabilitado no código, inclusive se variáveis antigas estiverem em `1`. Estrutura, dados e consultas de pagamentos antigos por cartão permanecem preservados. As instruções técnicas de cartão abaixo ficam como referência histórica e não habilitam o recurso nesta revisão.** A `main` não tinha uma base de plano; a criação da base foi autorizada pelo responsável. Nenhum banco de produção, credencial, e-mail real ou cobrança real foi utilizado nesta entrega.
 
+Atualização administrativa: também é possível validar a participação manualmente, com origem e histórico próprios, sem declarar pagamento na FastFlow. Consulte [validação manual e cancelamento de solicitações não pagas](plano-validacao-administrador.md). As exigências de confirmação pela API abaixo continuam aplicáveis ao fluxo automático.
+
 ## Comportamento implementado
 
 - R$ 33,90 por ciclo mensal, 10 créditos. Pequeno consome 1 e grande 2, com mistura de tamanhos. Valor fixado no servidor. Crédito não acumula.

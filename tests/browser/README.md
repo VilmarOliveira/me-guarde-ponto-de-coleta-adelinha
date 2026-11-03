@@ -168,3 +168,16 @@ ausência de campos de cartão na oferta atual por Pix. Capturas e
 banco fictício ficam no diretório temporário indicado no JSON final. A emulação
 não substitui aparelhos físicos, Safari/iOS ou homologação real autorizada do
 provedor. O teste exige a porta 5058 livre.
+
+Validação manual e cancelamento administrativo do plano, com servidor próprio em
+`127.0.0.1:5059`, banco temporário e provedor simulado:
+
+```bash
+PYTHONPATH=/tmp/adelinha-browser-py .venv/bin/python tests/browser/plan_administration.py
+```
+
+Confere sete larguras, busca de clientes, prévia/confirmacão com motivo, liberação
+administrativa sem chamada de cobrança, cancelamento não pago por toque,
+histórico separado e ausência de rolagem horizontal/erros JavaScript. Os artefatos
+ficam no diretório temporário indicado no JSON final. Não usa dados de produção,
+não envia e-mails e não executa cobranças reais.

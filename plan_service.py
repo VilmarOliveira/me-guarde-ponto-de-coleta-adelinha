@@ -98,7 +98,7 @@ def schema(db, id_type):
         reason TEXT NOT NULL,created_at TEXT NOT NULL,previous_state TEXT NOT NULL,final_state TEXT NOT NULL,
         UNIQUE(order_id,action))""")
     db.execute(
-        "CREATE UNIQUE INDEX IF NOT EXISTS idx_plan_one_entitlement_order ON plan_orders(client_id,cycle_key) WHERE state IN ('creating','uncertain','pending','approved','under_review','paid','manual_approved')"
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_plan_one_entitlement_order_v2 ON plan_orders(client_id,cycle_key) WHERE state IN ('creating','uncertain','pending','approved','under_review','paid','manual_approved','cancel_requested')"
     )
     db.execute(
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_plan_one_open_order ON plan_orders(client_id,cycle_key) WHERE state IN ('creating','uncertain','pending','approved','under_review','paid')"
@@ -216,7 +216,9 @@ def next_cycle_key(db, client_id, value):
     return "restart:" + previous["id"] if previous else "activation"
 
 
-def reserve_order(db, owner, method, value, settings):
+def reserve_order(
+    db, owner, method, value, settings, *, expected_key=None, accepted_by_client=True
+):
     db.commit()
     db.begin_write()
     lock_account(db, owner["id"], value)
@@ -234,8 +236,11 @@ def reserve_order(db, owner, method, value, settings):
             "Há um pagamento em revisão administrativa. Seus pacotes recebidos continuam disponíveis para retirada.",
         )
     key = next_cycle_key(db, owner["id"], value)
+    if expected_key is not None and key != expected_key:
+        db.commit()
+        return None, "O ciclo mudou. Abra a confirmação novamente antes de cobrar."
     old = db.execute(
-        "SELECT * FROM plan_orders WHERE client_id=? AND cycle_key=? AND state IN ('creating','uncertain','pending','approved','under_review','paid','manual_approved') ORDER BY created_at DESC LIMIT 1",
+        "SELECT * FROM plan_orders WHERE client_id=? AND cycle_key=? AND state IN ('creating','uncertain','pending','approved','under_review','paid','manual_approved','cancel_requested') ORDER BY created_at DESC LIMIT 1",
         (owner["id"], key),
     ).fetchone()
     if old:
@@ -256,8 +261,8 @@ def reserve_order(db, owner, method, value, settings):
     oid = str(uuid.uuid4())
     stamp = iso(value)
     db.execute(
-        """INSERT INTO plan_orders(id,client_id,method,amount_cents,cycle_key,renewal_of,state,created_at,payer_document,callback_url,rules_version,rules_text,accepted_at)
-        VALUES(?,?,?,?,?,?,'creating',?,?,?,?,?,?)""",
+        """INSERT INTO plan_orders(id,client_id,method,amount_cents,cycle_key,renewal_of,state,created_at,payer_document,callback_url,rules_version,rules_text,accepted_at,local_method,creation_started_at)
+        VALUES(?,?,?,?,?,?,'creating',?,?,?,?,?,?,'Pix Fast','')""",
         (
             oid,
             owner["id"],
@@ -270,7 +275,7 @@ def reserve_order(db, owner, method, value, settings):
             settings.callback(oid),
             PLAN_RULES_VERSION,
             PLAN_RULES,
-            stamp,
+            stamp if accepted_by_client else "",
         ),
     )
     db.commit()
@@ -322,6 +327,10 @@ def attach_creation_id(db, order_id, data, value):
     if not isinstance(data, dict):
         raise GatewayError(code="invalid_response")
     tid = transaction_id(data.get("id"))
+    if db.execute(
+        "SELECT 1 FROM pickup_payment_orders WHERE transaction_id=?", (tid,)
+    ).fetchone():
+        raise GatewayError(code="identity_mismatch")
     if data.get("payment_provider") != "fastflow" or not money_matches(
         data.get("amount")
     ):
@@ -391,6 +400,10 @@ def apply_transaction(db, order_id, data, value):
     if not original:
         raise GatewayError(code="unknown_order")
     tid = validate_transaction(dict(original), data)
+    if db.execute(
+        "SELECT 1 FROM pickup_payment_orders WHERE transaction_id=?", (tid,)
+    ).fetchone():
+        raise GatewayError(code="identity_mismatch")
     state = data.get("status")
     if state not in (
         "pending",
@@ -442,7 +455,7 @@ def apply_transaction(db, order_id, data, value):
         else None
     )
     db.execute(
-        """UPDATE plan_orders SET transaction_id=?,checked_at=?,check_after=?,qr_text=COALESCE(?,qr_text),expires_at=COALESCE(?,expires_at),settlement_state=?,card_brand=?,card_last4=?,error_code=CASE WHEN state='admin_cancelled' THEN error_code ELSE NULL END WHERE id=?""",
+        """UPDATE plan_orders SET transaction_id=?,checked_at=?,check_after=?,qr_text=COALESCE(?,qr_text),expires_at=COALESCE(?,expires_at),settlement_state=?,card_brand=?,card_last4=?,error_code=CASE WHEN state IN ('admin_cancelled','cancel_requested') OR error_code='duplicate_manual_and_fast_payment' THEN error_code ELSE NULL END WHERE id=?""",
         (
             tid,
             iso(value),
@@ -462,10 +475,28 @@ def apply_transaction(db, order_id, data, value):
         "SELECT 1 FROM plan_admin_decisions WHERE order_id=? AND action='approve'",
         (order_id,),
     ).fetchone()
-    if order["state"] == "admin_cancelled":
+    if order["state"] in ("admin_cancelled", "cancel_requested"):
         if state == "paid":
             db.execute(
                 "UPDATE plan_orders SET paid_at=COALESCE(paid_at,?),error_code='payment_after_cancellation' WHERE id=?",
+                (iso(value), order_id),
+            )
+        elif state == "refunded":
+            db.execute(
+                "UPDATE plan_orders SET refunded_at=COALESCE(refunded_at,?) WHERE id=?",
+                (iso(value), order_id),
+            )
+        elif state in ("cancelled", "expired"):
+            db.execute(
+                "UPDATE plan_orders SET state='admin_cancelled',cancel_state='closed',error_code=CASE WHEN paid_at IS NULL THEN NULL ELSE error_code END WHERE id=?",
+                (order_id,),
+            )
+        db.commit()
+        return
+    if manual_approval and order["manual_paid_at"]:
+        if state == "paid":
+            db.execute(
+                "UPDATE plan_orders SET paid_at=COALESCE(paid_at,?),error_code='duplicate_manual_and_fast_payment' WHERE id=?",
                 (iso(value), order_id),
             )
         elif state == "refunded":

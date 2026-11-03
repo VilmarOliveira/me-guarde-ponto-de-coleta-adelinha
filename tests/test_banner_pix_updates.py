@@ -145,35 +145,35 @@ def test_pix_edit_qr_history_and_restart(configured):
     client.post('/pacotes/1/avisar', data={'csrf_token': csrf(client)})
     def update(key, receiver):
         response = client.post('/painel/configuracoes/pix', data={'receiver': receiver,
-            'pix_key_type': 'E-mail', 'pix_key': key, 'csrf_token': csrf(client)}, follow_redirects=True)
+            'pix_key_type': 'CNPJ', 'pix_key': key, 'csrf_token': csrf(client)}, follow_redirects=True)
         assert 'Dados do Pix atualizados com sucesso!' in response.text
-    update('primeiro@example.com', 'Primeiro titular com um nome muito longo')
+    update('11222333000181', 'Primeiro titular com um nome muito longo')
     summary = client.post('/painel/retirada/resumo', data={'package_ids': '1', 'csrf_token': csrf(client)})
     assert summary.status_code == 200
-    assert 'primeiro@example.com' in summary.json['pix_code']
+    assert '11222333000181' in summary.json['pix_code']
     assert '5925' + 'PRIMEIRO TITULAR COM UM NOME MUITO LONGO'[:25] in summary.json['pix_code']
     assert summary.json['qr_code'].startswith('data:image/png;base64,')
     result = client.post('/retiradas', data={'package_ids': '1', 'receiver_name': 'Cliente Teste',
-        'receiver_document': '52998224725', 'document_type': 'CPF', 'payment_method': 'Pix',
+        'receiver_document': '52998224725', 'document_type': 'CPF', 'payment_method': 'Pix AI',
         'payment_confirmed': 'yes', 'pickup_signature': signature(), 'csrf_token': csrf(client)})
     assert result.status_code == 302
     pdf_before = client.get('/comprovantes/1/pacotes/1.pdf').data
     with sqlite3.connect(database) as db:
         before = db.execute('SELECT * FROM pickups').fetchall()
-    update('segundo@example.com', 'Segundo titular')
+    update('38145273000105', 'Segundo titular')
     restarted = create_app({'TESTING': True, 'SECRET_KEY': 'test', 'DATABASE': database}).test_client()
     legacy_login(restarted)
-    assert 'segundo@example.com' in restarted.get('/painel/configuracoes/pix?editar=1').text
+    assert '38145273000105' in restarted.get('/painel/configuracoes/pix?editar=1').text
     with sqlite3.connect(database) as db:
         assert db.execute('SELECT * FROM pickups').fetchall() == before
-        assert db.execute('SELECT pix_key_snapshot FROM pickups').fetchone()[0] == 'primeiro@example.com'
+        assert db.execute('SELECT pix_key_snapshot FROM pickups').fetchone()[0] == '11222333000181'
     restarted.post('/pacotes', data={'client_id': '1', 'tracking': 'TESTPIX2', 'shelf': 'A2',
         'width': '20', 'height': '20', 'length': '20', 'weight': '1', 'csrf_token': csrf(restarted)})
     restarted.post('/pacotes/2/avisar', data={'csrf_token': csrf(restarted)})
     summary_after = restarted.post('/painel/retirada/resumo', data={'package_ids': '2', 'csrf_token': csrf(restarted)})
     assert summary_after.status_code == 200
-    assert 'segundo@example.com' in summary_after.json['pix_code']
-    assert 'primeiro@example.com' not in summary_after.json['pix_code']
+    assert '38145273000105' in summary_after.json['pix_code']
+    assert '11222333000181' not in summary_after.json['pix_code']
     pdf_after = restarted.get('/comprovantes/1/pacotes/1.pdf').data
-    assert b'primeiro@example.com' in pdf_after and b'segundo@example.com' not in pdf_after
+    assert b'11222333000181' in pdf_after and b'38145273000105' not in pdf_after
     assert re.findall(rb'stream(.*?)endstream', pdf_after, re.S) == re.findall(rb'stream(.*?)endstream', pdf_before, re.S)

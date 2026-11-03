@@ -181,3 +181,12 @@ administrativa sem chamada de cobrança, cancelamento não pago por toque,
 histórico separado e ausência de rolagem horizontal/erros JavaScript. Os artefatos
 ficam no diretório temporário indicado no JSON final. Não usa dados de produção,
 não envia e-mails e não executa cobranças reais.
+
+## Área do Cliente e três modalidades de pagamento
+
+```bash
+.venv/bin/python -m pip install --target /tmp/adelinha-browser-py playwright
+PYTHONPATH=/tmp/adelinha-browser-py .venv/bin/python tests/browser/customer_payments.py
+```
+
+Usa Chromium em `/usr/bin/chromium`, servidor temporário em `127.0.0.1:5077`, dados fictícios e FastFlow simulada. Verifica as seis abas nas sete larguras, menu móvel, saldo, PDF, Pix AI/Fast/Dinheiro, pagamento separado da entrega, assinatura no redimensionamento, renovação manual e ativação por API. Relatório e capturas ficam na pasta temporária informada ao final. Sem cobranças ou e-mails reais.

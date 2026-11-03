@@ -82,7 +82,7 @@ def test_staff_edits_and_client_sees_both_addresses(app, client):
     assert connection.execute("SELECT residential_street,residential_state FROM clients WHERE id=1").fetchone() == ("Rua Nova", "SP")
     with client.session_transaction() as session:
         session.clear(); session["client_id"] = 1; session["client_session_version"] = 1; session["csrf_token"] = "test-csrf"
-    page = client.get("/cliente").text
+    page = client.get("/cliente?aba=dados").text
     assert "Rua Nova" in page
     assert "Endereço Pickup (retirada)" in page
     assert "RUA AFONSO BORGES DE FREITAS" in page
@@ -406,7 +406,7 @@ def test_pickup_screen_has_only_pix_and_cash_and_exact_summary_order(client):
     login(client)
     dashboard = client.get("/painel").text
     assert "Cartão de débito" not in dashboard and "Cartão de crédito" not in dashboard
-    assert dashboard.count('name="payment_method"') == 2
+    assert dashboard.count('name="payment_method"') == 3
     labels = ["Pacotes + taxa de atraso:", "Acréscimo:", "Desconto:", "Total a pagar:"]
     positions = [dashboard.index(label) for label in labels]
     assert positions == sorted(positions)
@@ -446,7 +446,7 @@ def test_percentage_discount_updates_pix_and_is_saved_in_history(app, client):
     assert "54048.57" in summary.json["pix_code"]
 
     response = client.post("/retiradas", data={"package_ids": ["1", "2"], "receiver_name": "Cliente Teste",
-        "receiver_document": "52998224725", "document_type": "CPF", "payment_method": "Pix",
+        "receiver_document": "52998224725", "document_type": "CPF", "payment_method": "Pix AI",
         "payment_confirmed": "yes", "discount_percent": "12,5", "pickup_signature": signature(),
         "csrf_token": token(client)}, follow_redirects=True)
     assert "R$ 8,57" in response.text
@@ -495,18 +495,18 @@ def test_surcharge_precedes_discount_updates_pix_and_persists_reason(app, client
     assert summary.status_code == 200
     assert summary.json["package_total"] == 4.9
     assert summary.json["surcharge_amount"] == 3
-    assert summary.json["original_total"] == 4.9
-    assert summary.json["discount_amount"] == 1.23
-    assert summary.json["total"] == 6.67
-    assert "54046.67" in summary.json["pix_code"]
+    assert summary.json["original_total"] == 7.9
+    assert summary.json["discount_amount"] == 1.98
+    assert summary.json["total"] == 5.92
+    assert "54045.92" in summary.json["pix_code"]
     response = client.post("/retiradas", data={"package_ids": "1", "receiver_name": "Cliente Teste",
-        "receiver_document": "52998224725", "document_type": "CPF", "payment_method": "Pix",
+        "receiver_document": "52998224725", "document_type": "CPF", "payment_method": "Pix AI",
         "payment_confirmed": "yes", "surcharge_amount": "3,00", "surcharge_reason": "Servico adicional",
         "discount_percent": "25", "pickup_signature": signature(), "csrf_token": token(client)}, follow_redirects=True)
-    assert "Servico adicional" in response.text and "R$ 6,67" in response.text
+    assert "Servico adicional" in response.text and "R$ 5,92" in response.text
     row = sqlite3.connect(app.config["DATABASE"]).execute("""SELECT surcharge_amount,surcharge_reason,
         surcharge_applied_by,original_total,discount_amount,final_total,total_paid FROM pickups""").fetchone()
-    assert row == (3, "Servico adicional", "staff", 4.9, 1.23, 6.67, 6.67)
+    assert row == (3, "Servico adicional", "staff", 7.9, 1.98, 5.92, 5.92)
     detail = client.get("/painel/pacotes/1")
     assert "Motivo do acréscimo" in detail.text and "Servico adicional" in detail.text
     pdf = client.get("/comprovantes/1/pacotes/1.pdf")

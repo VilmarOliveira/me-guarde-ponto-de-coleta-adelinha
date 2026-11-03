@@ -158,7 +158,9 @@ def build_receipt_pdf(withdrawal, packages, address):
         ("Total final pago", _display(final_total, True)),
         ("Tipo de Pagamento", _display(_value(withdrawal, "payment_method"))),
     )
-    if _value(withdrawal, "payment_method") == "Pix":
+    if _value(withdrawal,"external_transaction_id"):
+        fields += (("Transação FastFlow",str(_value(withdrawal,"external_transaction_id"))),)
+    if _value(withdrawal, "payment_method") in ("Pix","Pix AI"):
         fields += (
             ("Titular Pix registrado", _display(_value(withdrawal, "pix_receiver_snapshot"))),
             ("Chave Pix registrada", _display(_value(withdrawal, "pix_key_snapshot"))),

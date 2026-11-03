@@ -80,15 +80,17 @@ with sync_playwright() as p:
         page.set_viewport_size({"width": width, "height": 900})
         page.wait_for_timeout(100)
         assert page.evaluate("document.documentElement.scrollWidth<=innerWidth"), width
-    assert "não confirma pagamento" in page.locator("main").inner_text()
+    assert "Pix Fast depende do pagamento efetivo na API" in page.locator("main").inner_text()
     page.locator("textarea[name=reason]").fill(
         "Autorização administrativa conferida no teste fictício do ponto."
     )
+    page.locator("input[name=payment_method][value=Dinheiro]").check()
+    page.locator("input[name=payment_confirmed]").check()
     page.locator("input[name=confirm]").check()
-    page.get_by_role("button", name="Confirmar validação manual", exact=True).click()
+    page.get_by_role("button", name="Confirmar pagamento e ativar plano", exact=True).click()
     page.wait_for_load_state("networkidle")
     assert (
-        "Participação no plano validada manualmente"
+        "Plano ativado com sucesso"
         in page.locator("main").inner_text()
     )
     assert (

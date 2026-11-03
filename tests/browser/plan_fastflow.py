@@ -120,7 +120,7 @@ with sync_playwright() as p:
     page.wait_for_load_state("networkidle")
     assert "10" in page.locator(".plan-balance").inner_text()
     page.locator("input[name=plan_rules]").check()
-    page.get_by_role("button", name="Renovar meu plano — R$ 33,90", exact=True).click()
+    page.get_by_role("button", name="Renovar por Pix — R$ 33,90", exact=True).click()
     page.wait_for_load_state("networkidle")
     fake.records["2"]["status"] = "paid"
     order = dict(

@@ -50,11 +50,18 @@ with sync_playwright() as p:
     # Route is discovered from the authentication redirect, avoiding assumptions.
     page.goto("http://127.0.0.1:5058/")
     page.wait_for_load_state("networkidle")
+    logo=page.locator('.monthly-offer img.monthly-brand')
+    assert logo.count()==1
+    logo.scroll_into_view_if_needed()
+    logo.evaluate("e=>e.decode()")
+    assert logo.evaluate("e=>e.naturalWidth===2169 && e.naturalHeight===725")
+    assert page.locator('header img[src*="me-guarde-mais/logo-original"]').count()==0
     for width in (320,360,390,430,768,1024,1440):
         page.set_viewport_size({'width':width,'height':900})
         assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
         columns=page.locator('.monthly-offer').evaluate("e=>getComputedStyle(e).gridTemplateColumns.split(' ').length")
         assert columns==(1 if width<768 else 2)
+        assert logo.evaluate("e=>getComputedStyle(e).objectFit==='contain' && e.getBoundingClientRect().width<=innerWidth")
     page.set_viewport_size({'width':1440,'height':1000})
     page.locator('.payment-options').screenshot(path=str(folder/'home-plan-1440.png'))
     page.set_viewport_size({'width':390,'height':844})

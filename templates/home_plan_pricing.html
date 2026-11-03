@@ -4,7 +4,7 @@
 <h3 class="payment-section-label"><span>PLANO MENSAL</span></h3>
 <article class="monthly-offer" aria-label="Plano ME GUARDE Mais">
 <div class="monthly-summary">
-{% if public_plan_logo %}<img class="monthly-brand" src="{{ url_for('plans.logo') }}" alt="ME GUARDE⁺ — Plano mensal" loading="lazy">{% else %}<div class="monthly-brand-text">ME GUARDE<sup>+</sup><small>PLANO MENSAL</small></div>{% endif %}
+<img class="monthly-brand" src="{{ url_for('static', filename='brand/me-guarde-mais/logo-original.png', v='6e5ae49da703') }}" alt="ME GUARDE⁺ — Plano mensal" width="2169" height="725" loading="lazy" decoding="async">
 <div class="monthly-price"><p><strong>R$ {{ '%.2f'|format(offer.monthly_price)|replace('.',',') }}</strong><span>/mês</span></p><b class="monthly-saving">{{ icon('tag') }} ECONOMIZE ATÉ {{ offer.saving_percent }}%</b></div>
 <div class="monthly-includes">{{ icon('box') }}<p><strong>Inclui até {{ offer.small_count }} pacotes pequenos ou {{ offer.large_count }} grandes por mês.</strong><br>Cada grande equivale a {{ offer.large_equivalent }} pequenos.</p></div>
 </div>

@@ -42,7 +42,7 @@ ME_GUARDE_MAIS_LOGO_PATH=/var/lib/ponto-coleta/me-guarde-plus.webp
 - `FASTFLOW_PUBLIC_ORIGIN`: origem HTTPS pública, sem caminho, query ou fragmento. O valor acima utiliza o domínio já documentado do sistema; confirme DNS/HTTPS da instalação. Não depende do cabeçalho Host enviado pelo visitante.
 - `FASTFLOW_CARD_ENABLED`: só `1` depois da liberação de Card In para a conta.
 - `FASTFLOW_CARD_PCI_READY`: só `1` depois de concluir a avaliação/configuração de segurança da captura direta abaixo. Não é certificado nem substitui validação PCI.
-- `ME_GUARDE_MAIS_LOGO_PATH`: caminho persistente de arquivo **aprovado** PNG/JPG/WebP, máximo 900 KB. A arte ME GUARDE⁺ não foi encontrada no repositório/anexos disponíveis. Enquanto não houver arquivo aprovado, deixe vazio: exibe o nome textual do plano, sem redesenhar a marca. O usuário do serviço precisa poder ler o arquivo. Não inserir segredo nesse caminho.
+- `ME_GUARDE_MAIS_LOGO_PATH`: caminho persistente de arquivo **aprovado** PNG/JPG/WebP, máximo 900 KB. Esse caminho opcional mantém os usos anteriores da Área do Cliente. A logo original recebida posteriormente acompanha o código em `static/brand/me-guarde-mais/logo-original.png` e é usada somente no cartão PLANO MENSAL da página inicial; não depende desta variável nem altera os demais usos. O usuário do serviço precisa poder ler o arquivo. Não inserir segredo nesse caminho.
 
 ```bash
 sudo chown root:root /etc/ponto-coleta/site.env
@@ -152,7 +152,7 @@ sudo systemctl status ponto-coleta-plan-reconcile.service ponto-coleta-plan-remi
 
 Acesse **Área do Ponto → Configurações → Plano ME GUARDE Mais** como administrador com permissão de configurações (ou acesso administrativo legado habilitado). Há pedidos, clientes, IDs, valor, estados, recebíveis, datas, ciclos, concessões, consumo e notificações sanitizadas. **Consultar na API** não altera status remotamente nem concede por decisão humana. Cliente: **Área do Cliente → Meu plano e créditos**, endereço `/cliente/plano`.
 
-Antes de operar: configurar chave fastflow e validar provedor, cadastrar webhook/segredo correto e testar entrega HTTPS, confirmar Gmail e timers, disponibilizar arte ME GUARDE⁺ aprovada, revisar o tratamento de dados da FastFlow na Política de Privacidade e as regras com o responsável, e completar a avaliação PCI/liberação do Card In se desejar cartão. A política foi complementada com o novo tratamento condicional e mantém os pontos de revisão já existentes. Nenhuma ativação real ou implantação Oracle foi executada por esta tarefa.
+Antes de operar: configurar chave fastflow e validar provedor, cadastrar webhook/segredo correto e testar entrega HTTPS, confirmar Gmail e timers, revisar o tratamento de dados da FastFlow na Política de Privacidade e as regras com o responsável, e completar a avaliação PCI/liberação do Card In se desejar cartão. A política foi complementada com o novo tratamento condicional e mantém os pontos de revisão já existentes. Nenhuma ativação real ou implantação Oracle foi executada por esta tarefa.
 
 Não há sandbox documentado no material entregue. Uma validação ponta a ponta real depende de ambiente autorizado do provedor e das credenciais no servidor; os testes locais não comprovam disponibilidade da conta, entregabilidade Gmail, operação do proxy ou liquidação real. Não são feitas cobranças reais para substituir essa homologação.
 

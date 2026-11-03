@@ -40,6 +40,26 @@ def article_context(db,post,legacy_formatter):
     return {'article':None,'formatted_body':legacy_formatter(post['body'])}
 
 
+def cover_data_uri(data):
+    if not data:return None
+    data=bytes(data)
+    mime='image/png' if data.startswith(b'\x89PNG') else 'image/webp' if data.startswith(b'RIFF') else 'image/jpeg'
+    return 'data:'+mime+';base64,'+base64.b64encode(data).decode()
+
+
+def resolve_cover(db,form,files,validator):
+    """One rule for preview/save: retain unless explicitly replaced or removed."""
+    previous=db.execute('SELECT cover_image,cover_alt FROM blog_posts WHERE '+('id=?' if form.get('post_id') else 'slug=?'),(form.get('post_id') or form.get('slug','').strip().lower(),)).fetchone()
+    upload=files.get('cover_image');has_upload=bool(upload and upload.filename)
+    data=upload.read(900*1024+1) if has_upload else None
+    if has_upload and not validator(data,900*1024):raise ValueError('A capa deve ser PNG, JPG ou WebP de até 900 KB. A imagem anterior foi preservada.')
+    remove=form.get('remove_cover')=='yes'
+    if has_upload and remove:raise ValueError('Escolha substituir ou remover a capa. Desmarque a remoção para enviar uma imagem. A imagem anterior foi preservada.')
+    if remove:return None,''
+    alt=form.get('cover_alt',previous['cover_alt'] if previous else '') or ''
+    return (data if has_upload else bytes(previous['cover_image']) if previous and previous['cover_image'] else None),alt.strip()
+
+
 def install(app,db,admin_required,current_staff,now,legacy_formatter,validator):
     bp=Blueprint('blog_tools',__name__)
     def icon_admin():
@@ -63,13 +83,9 @@ def install(app,db,admin_required,current_staff,now,legacy_formatter,validator):
     def preview():
         post={key:request.form.get(key,'') for key in ('title','summary','slug','cover_alt','seo_title','seo_description')}
         post.update(body=str(escape(request.form.get('body',''))),layout='icons' if request.form.get('layout','icons')=='icons' else 'legacy',toc_enabled=int(request.form.get('toc_enabled')=='yes'),cover_image=None,published_at=None,updated_at=None)
-        if post['layout']=='legacy':
-            upload=request.files.get('cover_image')
-            previous=db().execute('SELECT cover_image FROM blog_posts WHERE slug=?',(post['slug'],)).fetchone()
-            data=upload.read(900*1024+1) if upload and upload.filename else bytes(previous['cover_image']) if previous and previous['cover_image'] else None
-            mime=validator(data,900*1024) if data else None
-            if data and not mime:return {'message':'A capa deve ser PNG, JPG ou WebP de até 900 KB.'},400
-            if mime:post.update(cover_image=True,preview_cover_src='data:'+mime+';base64,'+base64.b64encode(data).decode())
+        try:data,alt=resolve_cover(db(),request.form,request.files,validator)
+        except ValueError as error:return {'message':str(error)},400
+        post.update(cover_image=bool(data),cover_alt=alt,preview_cover_src=cover_data_uri(data))
         context=article_context(db(),post,legacy_formatter)
         return {'html':render_template('blog_article.html',post=post,preview=True,**context),'warnings':context['article']['warnings'] if context['article'] else []}
 

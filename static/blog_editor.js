@@ -8,6 +8,19 @@
     if(!response.headers.get('content-type')?.includes('application/json'))throw new Error(message);
     try{return await response.json();}catch(_){throw new Error(message);}
   }
+  const cover=form.querySelector('[data-blog-cover-editor]');
+  if(cover){
+    const input=form.elements.cover_image,remove=form.elements.remove_cover,preview=cover.querySelector('[data-banner-preview]'),original=preview.getAttribute('src');
+    const option=cover.querySelector('[data-cover-remove-option]'),note=cover.querySelector('[data-cover-removal-note]');
+    input.addEventListener('change',()=>{remove.checked=false;note.hidden=true;option.hidden=!original&&!input.files.length;});
+    remove.addEventListener('change',()=>{
+      const checked=remove.checked;
+      input.value='';input.dispatchEvent(new Event('change',{bubbles:true}));
+      remove.checked=checked;preview.hidden=checked||!original;note.hidden=!checked;option.hidden=!original;
+    });
+    if(remove.checked){preview.hidden=true;note.hidden=false;}
+    form.elements.cover_alt.addEventListener('input',()=>{preview.alt=form.elements.cover_alt.value||'Prévia da imagem de capa';});
+  }
   const normalized=value=>value.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
   function update(){
     const value=body.value,withoutMarkers=value.replace(/^\[icone:[^\]\r\n]*\][ \t]*/gim,'');

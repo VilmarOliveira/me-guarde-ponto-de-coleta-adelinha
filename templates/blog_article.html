@@ -1,5 +1,5 @@
-<article class="document blog-article{% if post.layout=='icons' %} blog-reading{% endif %}"><span class="eyebrow">ME GUARDE · PONTO DE COLETA ADELINHA</span><h1>{{ post.title }}</h1>
-{% if post.layout!='icons' and post.cover_image %}<img class="article-cover" src="{{ post.preview_cover_src or url_for('blog_cover',slug=post.slug) }}" alt="{{ post.cover_alt }}">{% endif %}
+<article class="document blog-article{% if post.layout=='icons' %} blog-reading{% endif %}">{% if post.cover_image %}<img class="article-cover" src="{{ post.preview_cover_src or url_for('blog_cover',slug=post.slug,v=post.updated_at) }}" alt="{{ post.cover_alt or '' }}">{% endif %}
+<span class="eyebrow">ME GUARDE · PONTO DE COLETA ADELINHA</span><h1>{{ post.title }}</h1>
 {% if post.published_at %}<p class="muted">Publicado em {{ post.published_at|local_datetime }} · Atualizado em {{ post.updated_at|local_datetime }}</p>{% endif %}
 {% if post.summary %}<p class="blog-introduction"><b>{{ post.summary }}</b></p>{% endif %}
 <div class="article-body">{% if article is not none %}{{ article.intro|safe }}

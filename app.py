@@ -880,13 +880,17 @@ def create_app(test_config=None):
         if not post or not post["cover_image"]: abort(404)
         data = bytes(post["cover_image"])
         mime = "image/png" if data.startswith(b"\x89PNG") else ("image/webp" if data.startswith(b"RIFF") else "image/jpeg")
-        return Response(data, mimetype=mime, headers={"Cache-Control":"public, max-age=86400"})
+        response=Response(data,mimetype=mime,headers={'Cache-Control':'public, max-age=86400','X-Content-Type-Options':'nosniff'})
+        response.set_etag(hashlib.sha256(data).hexdigest())
+        return response.make_conditional(request)
 
     def blog_editor(edit=None,status=200):
         posts=db().execute("SELECT id,slug,title,status,updated_at FROM blog_posts ORDER BY updated_at DESC LIMIT 50").fetchall()
         if edit is not None:
             edit=dict(edit)
             edit['body']=html.unescape(edit.get('body',''))
+            original=db().execute('SELECT cover_image FROM blog_posts WHERE '+('id=?' if edit.get('id') else 'slug=?'),(edit.get('id') or edit.get('slug',''),)).fetchone()
+            edit['cover_preview_src']=blog_tools.cover_data_uri(original['cover_image']) if original and original['cover_image'] else None
         return render_template('blog_admin.html',posts=posts,edit=edit,**blog_tools.editor_context(db(),current_staff)),status
 
     @app.route("/painel/blog", methods=["GET", "POST"])
@@ -905,16 +909,16 @@ def create_app(test_config=None):
                 original=db().execute('SELECT slug FROM blog_posts WHERE id=?',(request.form['post_id'],)).fetchone()
                 if not original or original['slug']!=slug:
                     flash('O endereço de um artigo existente deve ser preservado. Reabra o artigo para editar.','error');return blog_editor(values,400)
-            upload=request.files.get('cover_image');has_upload=bool(upload and upload.filename)
-            cover=upload.read(IMAGE_UPLOAD_MAX_BYTES+1) if has_upload else None
-            if has_upload and not validated_image_type(cover,IMAGE_UPLOAD_MAX_BYTES):
-                flash('A capa deve ser PNG, JPG ou WebP de até 900 KB. A imagem anterior foi preservada.','error');return blog_editor(values,400)
+            try:cover,cover_alt=blog_tools.resolve_cover(db(),request.form,request.files,validated_image_type)
+            except ValueError as error:
+                values['remove_cover']=''
+                flash(str(error),'error');return blog_editor(values,400)
             now_value=now().isoformat()
             db().execute("""INSERT INTO blog_posts(slug,title,summary,body,cover_image,cover_alt,seo_title,seo_description,status,published_at,updated_at,layout,toc_enabled)
                 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(slug) DO UPDATE SET title=excluded.title,summary=excluded.summary,body=excluded.body,
-                cover_image=COALESCE(excluded.cover_image,blog_posts.cover_image),cover_alt=excluded.cover_alt,seo_title=excluded.seo_title,seo_description=excluded.seo_description,
+                cover_image=excluded.cover_image,cover_alt=excluded.cover_alt,seo_title=excluded.seo_title,seo_description=excluded.seo_description,
                 status=excluded.status,published_at=COALESCE(blog_posts.published_at,excluded.published_at),updated_at=excluded.updated_at,layout=excluded.layout,toc_enabled=excluded.toc_enabled""",
-                (slug,title,request.form.get('summary','').strip(),body,cover,request.form.get('cover_alt','').strip(),request.form.get('seo_title','').strip(),request.form.get('seo_description','').strip(),status,now_value if status=='published' else None,now_value,layout,int(request.form.get('toc_enabled')=='yes')))
+                (slug,title,request.form.get('summary','').strip(),body,cover,cover_alt,request.form.get('seo_title','').strip(),request.form.get('seo_description','').strip(),status,now_value if status=='published' else None,now_value,layout,int(request.form.get('toc_enabled')=='yes')))
             db().commit();flash('Artigo salvo com sucesso!','success');return redirect(url_for('blog_admin'))
         edit=db().execute('SELECT id,slug,title,summary,body,cover_alt,seo_title,seo_description,status,layout,toc_enabled FROM blog_posts WHERE id=?',(request.args['edit'],)).fetchone() if request.args.get('edit') else None
         return blog_editor(edit)

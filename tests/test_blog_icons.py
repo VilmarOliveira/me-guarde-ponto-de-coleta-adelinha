@@ -130,7 +130,7 @@ def test_legacy_articles_images_urls_and_escaped_editor_round_trip_preserved(sit
     assert html.escape(raw,quote=True) in editor and '&amp;lt;script' not in editor
     assert 'value="legacy" selected' in editor
     publish(site,body=raw,layout='icons',post_id=str(pid))
-    assert 'class="article-cover"' not in site[2].get('/blog/'+data['slug']).text
+    assert 'class="article-cover"' in site[2].get('/blog/'+data['slug']).text
     assert site[2].get('/blog/'+data['slug']+'/capa').data==cover
     assert site[1].post('/painel/blog',data={'title':'Mover','slug':'outro-slug','post_id':str(pid),'body':raw,'layout':'icons','csrf_token':csrf(site[1])}).status_code==400
     assert site[2].get('/blog/'+data['slug']).status_code==200

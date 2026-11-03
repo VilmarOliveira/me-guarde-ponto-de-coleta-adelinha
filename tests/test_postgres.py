@@ -318,3 +318,26 @@ def test_blog_icon_assets_are_included_in_sqlite_to_postgres_transfer(tmp_path):
     assert bytes(target.execute('SELECT image FROM blog_icon_assets WHERE digest=?',(digest,)).fetchone()['image'])==data
     assert target.execute('SELECT name,asset_hash FROM blog_icons WHERE identifier=?',('migrado-png',)).fetchone()=={'name':'Ícone vertical migrado','asset_hash':digest}
     target.close()
+
+
+@pytest.mark.skipif(not os.environ.get('TEST_DATABASE_URL'), reason='TEST_DATABASE_URL não configurada')
+def test_optional_blog_cover_preview_replace_remove_and_restart_pg():
+    import io
+    from PIL import Image
+    from test_customization import csrf,legacy_login
+    config={'TESTING':True,'SECRET_KEY':'pg-optional-cover','DATABASE':os.environ['TEST_DATABASE_URL']}
+    app=create_app(config);admin=app.test_client();legacy_login(admin)
+    image=io.BytesIO();Image.new('RGB',(1200,675),'orange').save(image,'WEBP');data=image.getvalue()
+    fields={'title':'Capa opcional PG','slug':'capa-opcional-pg','summary':'Resumo preservado','body':'[icone:localizacao] Endereço\n\nTexto completo com ícones.','layout':'icons','toc_enabled':'yes','cover_alt':'Caixa laranja','action':'publish','csrf_token':csrf(admin)}
+    assert admin.post('/painel/blog',data={**fields,'cover_image':(io.BytesIO(data),'capa.webp')}).status_code==302
+    public=create_app(config).test_client();page=public.get('/blog/capa-opcional-pg').text
+    assert page.index('class="article-cover"')<page.index('<h1>') and 'Caixa laranja' in page
+    assert public.get('/blog/capa-opcional-pg/capa').data==data
+    assert 'class="article-cover"' in admin.post('/painel/blog/previa',data=fields).json['html']
+    assert 'class="article-cover"' not in admin.post('/painel/blog/previa',data={**fields,'remove_cover':'yes'}).json['html']
+    assert public.get('/blog/capa-opcional-pg/capa').data==data
+    assert admin.post('/painel/blog',data={**fields,'remove_cover':'yes'}).status_code==302
+    restarted=create_app(config).test_client()
+    assert 'class="article-cover"' not in restarted.get('/blog/capa-opcional-pg').text
+    assert restarted.get('/blog/capa-opcional-pg/capa').status_code==404
+    assert 'Texto completo com ícones.' in restarted.get('/blog/capa-opcional-pg').text

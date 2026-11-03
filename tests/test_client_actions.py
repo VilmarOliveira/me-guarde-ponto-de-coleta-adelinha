@@ -195,7 +195,7 @@ def test_new_contract_publication_optional_existing_reaccept_and_append_history(
     assert records[-1]['terms_version']=='CONTRATO-CENTRAL-2' and records[-1]['terms_text']=='NOVO TEXTO CONTRATUAL, com aceite específico.'
     assert client.get('/cliente/dados-de-entrega').status_code==200
     assert 'CONTRATO-CENTRAL-2' in client.get('/cliente/condicoes-aceitas').text
-    assert 'CONTRATO-CENTRAL-2' in client.get('/cliente').text
+    assert 'CONTRATO-CENTRAL-2' in client.get('/cliente?aba=contratos').text
 
 
 def test_contract_without_reaccept_does_not_block_existing_clients(center):

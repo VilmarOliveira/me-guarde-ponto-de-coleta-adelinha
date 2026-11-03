@@ -185,7 +185,7 @@ def test_approved_not_paid_and_webhook_requires_fresh_api(site):
         signed(
             client, order, {"transaction_id": data["id"], "status": "paid"}
         ).status_code
-        == 200
+        == 202
     )
     assert not db.execute("SELECT 1 FROM plan_cycles").fetchone()
     fake.records[data["id"]]["status"] = "paid"

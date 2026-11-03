@@ -1,5 +1,7 @@
 import plan_service
 import plan_routes
+import pickup_payments
+import customer_area
 import os
 import secrets
 import hashlib
@@ -54,7 +56,7 @@ PRIVACY_CONTACT = os.environ.get("PRIVACY_CONTACT", "(16) 98800-4966")
 ADDRESS = PICKUP_ADDRESS  # compatibilidade com comprovantes e integrações existentes
 CLIENT_COLUMNS = "id,public_id,name,cpf,phone,email,terms_version,terms_text,signature,accepted_at,active,session_version,residential_cep,residential_street,residential_number,residential_district,residential_city,residential_state,residential_complement,legacy_public_id,contract_public_id,document_brand_version,document_logo_present,terms_display_label"
 PACKAGE_COLUMNS = "id,public_id,client_id,tracking,width,height,length,weight,shelf,category,base_price,status,created_at,notified_at,picked_at"
-PICKUP_COLUMNS = "id,receiver_name,receiver_document,document_type,signature,staff,picked_at,base_total,late_total,total_paid,payment_method,payment_confirmed,payment_confirmed_at,payment_confirmed_by,discount_type,discount_input,discount_amount,original_total,final_total,discount_applied_by,surcharge_amount,surcharge_reason,surcharge_applied_by,pix_key_snapshot,pix_receiver_snapshot,pix_key_type_snapshot,document_brand_version,document_logo_present"
+PICKUP_COLUMNS = "id,receiver_name,receiver_document,document_type,signature,staff,picked_at,base_total,late_total,total_paid,payment_method,payment_confirmed,payment_confirmed_at,payment_confirmed_by,discount_type,discount_input,discount_amount,original_total,final_total,discount_applied_by,surcharge_amount,surcharge_reason,surcharge_applied_by,pix_key_snapshot,pix_receiver_snapshot,pix_key_type_snapshot,document_brand_version,document_logo_present,external_transaction_id,payment_order_id,payment_status"
 PICKUP_PACKAGE_COLUMNS = "pickup_id,package_id,base_amount,late_amount,package_public_id,client_id,client_name,client_public_id,tracking_code,package_category,notified_at,service_amount,late_days,total_amount"
 PACKAGE_COLUMNS_P = ",".join(f"p.{column}" for column in PACKAGE_COLUMNS.split(","))
 PICKUP_COLUMNS_PU = ",".join(f"pu.{column}" for column in PICKUP_COLUMNS.split(","))
@@ -1233,7 +1235,7 @@ def create_app(test_config=None):
         client = db().execute("SELECT * FROM clients WHERE id=?", (session["client_id"],)).fetchone()
         accepted_record, pending_items = compliance(db(), client)
         page, page_size, offset = pagination()
-        package_rows = db().execute(f"SELECT {PACKAGE_COLUMNS} FROM packages WHERE client_id=? ORDER BY created_at DESC LIMIT ? OFFSET ?", (client["id"], page_size + 1, offset)).fetchall()
+        package_rows = db().execute(f"SELECT {PACKAGE_COLUMNS} FROM packages WHERE client_id=? AND status!='retirado' ORDER BY created_at DESC LIMIT ? OFFSET ?", (client["id"], page_size + 1, offset)).fetchall()
         has_next = len(package_rows) > page_size
         packages = package_rows[:page_size]
         pending = []
@@ -1245,7 +1247,10 @@ def create_app(test_config=None):
                     day = (now().date() - datetime.fromisoformat(package["notified_at"]).astimezone(TZ).date()).days + 1
                     item["deadline_alert"] = "ending" if day in (3, 4) else ("late" if day >= 5 else None)
                 pending.append(item)
-        return render_template("client_area.html", client=client, pending=pending, packages=packages, page=page, has_next=has_next, pending_items=pending_items, accepted_record=accepted_record, accepted_signature=signature_data(accepted_record.get("signature")))
+        area=customer_area.context(db(),client,now(),fees)
+        from fastflow_gateway import Settings
+        area.update(logo=bool(app.config.get("ME_GUARDE_MAIS_LOGO_PATH")),ready=Settings.from_config(app.config).ready,missing=plan_routes.eligible(db(),client,now()))
+        return render_template("client_area.html", **area, client=client, pending=pending, packages=packages, page=page, has_next=has_next, pending_items=pending_items, accepted_record=accepted_record, accepted_signature=signature_data(accepted_record.get("signature")))
 
     @app.route("/cliente/editar", methods=["GET", "POST"])
     @client_login_required
@@ -1269,6 +1274,18 @@ def create_app(test_config=None):
         db().commit()
         flash("Dados atualizados com sucesso", "success")
         return redirect(url_for("client_area"))
+
+    @app.post('/cliente/alterar-senha')
+    @client_login_required
+    def client_change_password():
+        person=db().execute('SELECT password_hash FROM clients WHERE id=?',(session['client_id'],)).fetchone()
+        password=request.form.get('password','')
+        if not person['password_hash'] or not check_password_hash(person['password_hash'],request.form.get('current_password','')) or len(password)<8 or password!=request.form.get('password_confirm'):
+            flash('Confira a senha atual e confirme a nova senha com pelo menos 8 caracteres.','error')
+            return redirect(url_for('client_area',aba='dados'))
+        db().execute('UPDATE clients SET password_hash=?,session_version=session_version+1 WHERE id=?',(generate_password_hash(password),session['client_id']))
+        session['client_session_version']=db().execute('SELECT session_version FROM clients WHERE id=?',(session['client_id'],)).fetchone()['session_version'];db().commit()
+        flash('Senha alterada com sucesso!','success');return redirect(url_for('client_area',aba='dados'))
 
     @app.get("/cliente/contrato-assinado.pdf")
     @client_login_required
@@ -1729,20 +1746,22 @@ def create_app(test_config=None):
         packages = db().execute(f"SELECT {PACKAGE_COLUMNS} FROM packages WHERE id IN ({placeholders}) AND status='aguardando_retirada'", ids).fetchall()
         if len(packages) != len(ids):
             return {"error": "Há pacote indisponível para retirada."}, 400
-        totals = [fees(package) for package in packages]
-        package_total = round(sum(item["total"] for item in totals), 2)
         try:
-            surcharge_amount, surcharge_reason = validate_surcharge(request.form.get("surcharge_amount", "0"), request.form.get("surcharge_reason", ""))
-            discount_type, discount_input, discount_amount, original_total, discounted_total = calculate_discount(
-                package_total, request.form.get("discount_amount", ""), request.form.get("discount_percent", ""))
-            final_total = (discounted_total + surcharge_amount).quantize(Decimal("0.01"))
-        except ValueError as error:
-            return {"error": str(error)}, 400
+            snapshot=pickup_payments.quote(packages,request.form,fees)
+            package_total=snapshot['package_total'];surcharge_amount=Decimal(str(snapshot['surcharge_amount']));surcharge_reason=snapshot['surcharge_reason']
+            discount_type=snapshot['discount_type'];discount_input=snapshot['discount_input'];discount_amount=Decimal(str(snapshot['discount_amount']));original_total=Decimal(str(snapshot['original_total']));final_total=Decimal(str(snapshot['final_total']))
+        except ValueError as error:return {'error':str(error)},400
+        held=db().execute('SELECT DISTINCT order_id FROM pickup_payment_reservations WHERE package_id IN ('+placeholders+')',tuple(ids)).fetchall()
+        payment_url=None
+        if held:
+            payment_url=url_for('pickup_payments.payment',oid=held[0]['order_id'])
+            if request.form.get('payment_method')!='Pix Fast':
+                return {'error':'Há Pix Fast reservado para esses pacotes. Consulte ou cancele antes de mudar a modalidade.','payment_url':payment_url},400
         setting = db().execute("SELECT pix_receiver_name,pix_key,pix_key_type FROM settings WHERE id=1").fetchone()
         receiver = setting["pix_receiver_name"]
-        payload = pix_payload(setting["pix_key"], receiver, float(final_total)) if receiver and final_total > 0 else None
+        payload = pix_payload(setting["pix_key"], receiver, float(final_total)) if receiver and setting["pix_key_type"]=="CNPJ" and final_total > 0 else None
         qr_data = qr_code_data_url(payload) if payload else None
-        return {"total": float(final_total), "package_total": package_total, "surcharge_amount": float(surcharge_amount),
+        return {"payment_url":payment_url,"total": float(final_total), "package_total": package_total, "surcharge_amount": float(surcharge_amount),
             "original_total": float(original_total), "discount_amount": float(discount_amount),
             "package_total_display": f"R$ {package_total:.2f}".replace(".", ","),
             "surcharge_display": f"R$ {surcharge_amount:.2f}".replace(".", ","),
@@ -1750,7 +1769,7 @@ def create_app(test_config=None):
             "original_total_display": f"R$ {original_total:.2f}".replace(".", ","),
             "discount_display": f"R$ {discount_amount:.2f}".replace(".", ","),
             "discount_type": discount_type, "discount_input": float(discount_input) if discount_input is not None else None,
-            "pix_code": payload, "qr_code": qr_data, "pix_configured": bool(receiver), "pix_zero_total": final_total == 0}
+            "pix_code": payload, "qr_code": qr_data, "pix_configured": bool(receiver and setting["pix_key_type"]=="CNPJ"), "pix_zero_total": final_total == 0}
 
     @app.post("/retiradas")
     @login_required
@@ -1772,8 +1791,8 @@ def create_app(test_config=None):
         payment_method = request.form.get("payment_method", "")
         signature = request.form.get("pickup_signature", "")
         payment_confirmed = request.form.get("payment_confirmed") == "yes"
-        allowed_payment_methods = ("Pix", "Dinheiro")
-        if not receiver or not valid_document(document_type, document) or payment_method not in allowed_payment_methods or not payment_confirmed or not signature.startswith("data:image/png;base64,"):
+        allowed_payment_methods = pickup_payments.METHODS
+        if not receiver or not valid_document(document_type, document) or payment_method not in allowed_payment_methods or not payment_confirmed or not signature.startswith("data:image/png;base64,") or not signature_data(signature):
             flash("Informe nome, tipo e número do documento, pagamento confirmado e assinatura.", "error")
             return redirect(url_for("dashboard"))
         placeholders = ",".join("?" * len(ids))
@@ -1792,7 +1811,7 @@ def create_app(test_config=None):
                 return redirect(url_for("package_detail", package_id=existing["package_id"]))
 
             packages = connection.execute(
-                f"SELECT {PACKAGE_COLUMNS} FROM packages WHERE id IN ({placeholders}) AND status='aguardando_retirada' ORDER BY id",
+                f"SELECT {PACKAGE_COLUMNS} FROM packages WHERE id IN ({placeholders}) AND status='aguardando_retirada' ORDER BY id"+(' FOR UPDATE' if connection.postgres else ''),
                 ids,
             ).fetchall()
             if len(packages) != len(ids):
@@ -1800,18 +1819,18 @@ def create_app(test_config=None):
                 flash("Retirada bloqueada: há pacote inválido ou que não está aguardando retirada.", "error")
                 return redirect(url_for("dashboard"))
 
-            totals = [fees(package) for package in packages]
             try:
-                surcharge_amount, surcharge_reason = validate_surcharge(request.form.get("surcharge_amount", "0"), request.form.get("surcharge_reason", ""))
-                discount_type, discount_input, discount_amount, original_total, discounted_total = calculate_discount(
-                    sum(x["total"] for x in totals), request.form.get("discount_amount", ""), request.form.get("discount_percent", ""))
-                final_total = (discounted_total + surcharge_amount).quantize(Decimal("0.01"))
+                fast_order=None
+                snapshot=pickup_payments.quote(packages,request.form,fees)
+                if payment_method=='Pix Fast' and snapshot['final_total']>0:
+                    fast_order,snapshot=pickup_payments.final_quote(connection,request.form.get('fast_order_id',''),ids,request.form)
+                else:pickup_payments.assert_unreserved(connection,ids)
+                totals=[dict(base=p['base'],late_fee=p['late_fee'],late_days=p['late_days'],total=p['total']) for p in snapshot['packages']]
+                surcharge_amount=Decimal(str(snapshot['surcharge_amount']));surcharge_reason=snapshot['surcharge_reason'];discount_type=snapshot['discount_type'];discount_input=snapshot['discount_input'];discount_amount=Decimal(str(snapshot['discount_amount']));original_total=Decimal(str(snapshot['original_total']));final_total=Decimal(str(snapshot['final_total']))
             except ValueError as error:
-                connection.rollback()
-                flash(str(error), "error")
-                return redirect(url_for("dashboard"))
+                connection.rollback();flash(str(error),'error');return redirect(url_for('dashboard'))
             picked_at = now().isoformat()
-            if payment_method == "Pix" and not connection.execute("SELECT pix_receiver_name,pix_key,pix_key_type FROM settings WHERE id=1 AND pix_receiver_name IS NOT NULL AND trim(pix_receiver_name)!=''").fetchone():
+            if payment_method == "Pix AI" and final_total>0 and not connection.execute("SELECT pix_receiver_name,pix_key,pix_key_type FROM settings WHERE id=1 AND pix_key_type='CNPJ' AND pix_receiver_name IS NOT NULL AND trim(pix_receiver_name)!=''").fetchone():
                 connection.rollback()
                 flash("Configure o nome do recebedor Pix antes de confirmar um pagamento Pix.", "error")
                 return redirect(url_for("dashboard"))
@@ -1827,7 +1846,7 @@ def create_app(test_config=None):
                  float(original_total), float(final_total), session["staff"], float(surcharge_amount), surcharge_reason, session["staff"]))
             pickup_id = cur.fetchone()["id"]
             connection.execute("UPDATE pickups SET document_brand_version=?,document_logo_present=? WHERE id=?", (BRAND_VERSION, int(ORIGINAL_LOGO.is_file()), pickup_id))
-            if payment_method == "Pix":
+            if payment_method == "Pix AI":
                 connection.execute("UPDATE pickups SET pix_key_snapshot=?,pix_receiver_snapshot=?,pix_key_type_snapshot=? WHERE id=?",
                     (pix_setting["pix_key"],pix_setting["pix_receiver_name"],pix_setting["pix_key_type"],pickup_id))
             for package, total in zip(packages, totals):
@@ -1837,6 +1856,10 @@ def create_app(test_config=None):
                     tracking_code,package_category,notified_at,service_amount,late_days,total_amount) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                     (pickup_id, package["id"], total["base"], total["late_fee"], package["public_id"], owner["id"], owner["name"], owner["public_id"], package["tracking"], package["category"], package["notified_at"], total["base"], total["late_days"], total["total"]))
                 connection.execute("UPDATE packages SET status='retirado', picked_at=? WHERE id=?", (picked_at, package["id"]))
+            connection.execute('UPDATE pickups SET external_transaction_id=?,payment_order_id=?,payment_status=? WHERE id=?',(fast_order['transaction_id'] if fast_order else None,fast_order['id'] if fast_order else None,'paid_api' if fast_order else 'zero_total' if final_total==0 else 'paid_manual',pickup_id))
+            if fast_order:
+                connection.execute("UPDATE pickup_payment_orders SET state='delivered',delivered_at=?,pickup_id=? WHERE id=?",(picked_at,pickup_id,fast_order['id']))
+                connection.execute('DELETE FROM pickup_payment_reservations WHERE order_id=?',(fast_order['id'],))
             connection.commit()
         except DatabaseIntegrityError:
             connection.rollback()
@@ -1865,6 +1888,12 @@ def create_app(test_config=None):
 
     @app.get("/comprovantes/<int:pickup_id>/pacotes/<int:package_id>.pdf")
     def receipt_pdf(pickup_id, package_id):
+        if session.get('staff_user_id'):
+            account=current_staff()
+            if not account or not account['active'] or account['deleted_at'] or account['session_version']!=session.get('staff_session_version'):abort(403)
+        elif not session.get('staff'):
+            person=db().execute('SELECT active,session_version FROM clients WHERE id=?',(session.get('client_id'),)).fetchone()
+            if not person or not person['active'] or person['session_version']!=session.get('client_session_version'):abort(403)
         row = db().execute(f"""SELECT {PICKUP_COLUMNS_PU},pp.package_public_id,pp.client_id snapshot_client_id,p.client_id owner_id,
             pp.client_name snapshot_client_name,pp.client_public_id snapshot_client_public_id,pp.tracking_code snapshot_tracking,
             pp.package_category snapshot_category,pp.notified_at snapshot_notified_at,pp.service_amount,pp.late_days,pp.late_amount,pp.total_amount
@@ -1889,6 +1918,7 @@ def create_app(test_config=None):
     install_regularization(app, db, client_login_required, now, lambda *args: send_code(*args), residential_address_form, valid_residential_address, current_contract)
     client_actions.install(app, db, client_login_required, admin_required, current_staff, now, lambda *args: send_code(*args), lambda: (TERMS_VERSION,CONTRACT_LABEL,terms_text()))
     plan_routes.install(app, db, client_login_required, admin_required, current_staff, now, qr_code_data_url, validated_image_type)
+    pickup_payments.install(app,db,login_required,current_staff,now,fees,qr_code_data_url)
     @app.context_processor
     def action_context():
         if not session.get('client_id'):return {}
@@ -2025,6 +2055,7 @@ def init_db(database):
         code_hash TEXT NOT NULL,expires_at BIGINT NOT NULL,attempts INTEGER NOT NULL,sent_at BIGINT NOT NULL,sends INTEGER NOT NULL,window_start BIGINT NOT NULL)""")
     client_actions.schema(connection,id_type)
     plan_service.schema(connection,id_type)
+    pickup_payments.schema(connection,id_type,ensure_columns)
     ensure_columns(connection, "pickups", {"payment_method": "TEXT", "document_type": "TEXT", "payment_confirmed_at": "TEXT", "payment_confirmed_by": "TEXT",
         "discount_type": "TEXT", "discount_input": "REAL", "discount_amount": "REAL", "original_total": "REAL",
         "final_total": "REAL", "discount_applied_by": "TEXT", "surcharge_amount": "REAL", "surcharge_reason": "TEXT",

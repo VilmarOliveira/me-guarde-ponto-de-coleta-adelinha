@@ -30,7 +30,7 @@ def fields(client, path):
         name: re.search('name="' + name + '" value="([^"]*)"', response.text).group(1)
         for name in ("operation_id", "cycle_key")
     }
-    return {**result, "csrf_token": token(client), "reason": REASON, "confirm": "yes"}
+    return {**result,"csrf_token":token(client),"reason":REASON,"confirm":"yes","payment_method":"Dinheiro","payment_confirmed":"yes"}
 
 
 def approve_direct(db, value=START, operation=None, order=None, expected=None):
@@ -43,7 +43,7 @@ def approve_direct(db, value=START, operation=None, order=None, expected=None):
         operation or str(uuid.uuid4()),
         value,
         Settings.from_config(CONFIG),
-        expected_key=expected or ps.next_cycle_key(db, 1, value),
+        expected_key=expected or ps.next_cycle_key(db, 1, value),payment_method="Dinheiro",payment_confirmed=True,
     )
 
 
@@ -55,7 +55,7 @@ def test_admin_enrolls_registered_client_without_charge_or_false_acceptance(site
     response = client.post(path, data=form, follow_redirects=True)
     assert (
         response.status_code == 200
-        and "Participação no plano validada manualmente" in response.text
+        and "Plano ativado com sucesso" in response.text
     )
     order = db.execute("SELECT * FROM plan_orders").fetchone()
     assert order["state"] == "manual_approved" and order["method"] == "administrative"
@@ -79,7 +79,7 @@ def test_admin_enrolls_registered_client_without_charge_or_false_acceptance(site
     assert (
         page.status_code == 200
         and "validada manualmente" in page.text
-        and "não confirma pagamento" in page.text
+        and "conferido manualmente" in page.text
     )
     assert "Pagamento aprovado!" not in page.text
 
@@ -141,34 +141,16 @@ def test_manual_renewal_respects_next_start_and_suppresses_reminders(site):
     )
 
 
-def test_manual_approval_of_existing_order_then_webhook_paid_never_grants_twice(site):
-    _, _, db, fake = site
-    order, data = create_cycle(db, fake, state="pending")
-    approve_direct(db, START + timedelta(minutes=1), order=order["id"])
-    assert (
-        db.execute("SELECT state FROM plan_orders").fetchone()["state"]
-        == "manual_approved"
-    )
-    for state in ("pending", "expired", "cancelled", "under_review"):
-        data["status"] = state
-        ps.apply_transaction(db, order["id"], data, START + timedelta(minutes=2))
-        assert not db.execute("SELECT suspended FROM plan_cycles").fetchone()[
-            "suspended"
-        ]
-        assert (
-            db.execute("SELECT state FROM plan_orders").fetchone()["state"]
-            == "manual_approved"
-        )
-    data["status"] = "paid"
-    ps.apply_transaction(db, order["id"], data, START + timedelta(minutes=3))
-    assert (
-        db.execute("SELECT paid_at FROM plan_orders").fetchone()["paid_at"] is not None
-    )
-    assert db.execute("SELECT COUNT(*) n FROM plan_cycles").fetchone()["n"] == 1
-    assert db.execute("SELECT COUNT(*) n FROM plan_credit_ledger").fetchone()["n"] == 1
-    assert (
-        db.execute("SELECT COUNT(*) n FROM plan_admin_decisions").fetchone()["n"] == 1
-    )
+def test_manual_approval_cannot_override_fast_and_late_duplicate_is_flagged(site):
+    _,_,db,fake=site;order,data=create_cycle(db,fake,state='pending')
+    with pytest.raises(ValueError,match='Pix Fast'):approve_direct(db,order=order['id'])
+    db.rollback();data['status']='expired';ps.apply_transaction(db,order['id'],data,START)
+    approve_direct(db,order=order['id'])
+    data['status']='paid';ps.apply_transaction(db,order['id'],data,START+timedelta(minutes=3))
+    row=db.execute('SELECT * FROM plan_orders').fetchone()
+    assert row['state']=='manual_approved' and row['error_code']=='duplicate_manual_and_fast_payment'
+    assert db.execute('SELECT COUNT(*) n FROM plan_cycles').fetchone()['n']==1
+    assert db.execute('SELECT COUNT(*) n FROM plan_credit_ledger').fetchone()['n']==1
 
 
 @pytest.mark.parametrize(
@@ -263,9 +245,9 @@ def test_cancel_api_failure_keeps_existing_request(site, monkeypatch):
 
     monkeypatch.setattr(fake, "cancel", fail, raising=False)
     path = "/painel/configuracoes/plano/pedidos/" + order["id"] + "/cancel"
-    assert client.post(path, data=fields(client, path)).status_code == 400
-    assert db.execute("SELECT state FROM plan_orders").fetchone()["state"] == "pending"
-    assert not db.execute("SELECT 1 FROM plan_admin_decisions").fetchone()
+    assert client.post(path, data=fields(client, path)).status_code == 302
+    assert db.execute("SELECT state FROM plan_orders").fetchone()["state"] == "cancel_requested"
+    assert db.execute("SELECT result FROM plan_admin_decisions").fetchone()["result"]=="awaiting_verification"
 
 
 def test_late_paid_after_admin_cancel_does_not_activate_or_erase_history(site):
@@ -428,12 +410,12 @@ def test_uncertain_request_without_remote_match_is_not_closed(site):
     db.commit()
     staff(client)
     path = "/painel/configuracoes/plano/pedidos/" + order["id"] + "/cancel"
-    response = client.post(path, data=fields(client, path))
-    assert response.status_code == 400 and "ainda está em correlação" in response.text
+    response = client.post(path, data=fields(client, path),follow_redirects=True)
+    assert response.status_code == 200 and "Cancelamento aguardando verificação" in response.text
     assert (
-        db.execute("SELECT state FROM plan_orders").fetchone()["state"] == "uncertain"
+        db.execute("SELECT state FROM plan_orders").fetchone()["state"] == "cancel_requested"
     )
-    assert not db.execute("SELECT 1 FROM plan_admin_decisions").fetchone()
+    assert db.execute("SELECT result FROM plan_admin_decisions").fetchone()["result"]=="awaiting_verification"
 
 
 def test_payment_races_remote_cancel_and_payment_is_preserved(site, monkeypatch):
@@ -535,7 +517,7 @@ def test_postgres_manual_approval_serializes_same_preview():
                 op,
                 START,
                 Settings.from_config(CONFIG),
-                expected_key=key,
+                expected_key=key,payment_method="Dinheiro",payment_confirmed=True,
             )
         finally:
             conn.close()
@@ -570,7 +552,7 @@ def test_admin_search_filters_orders_and_unpaid_requests(site):
     )
     page = client.get("/painel/configuracoes/plano?q=cliente-inexistente&only_unpaid=1")
     assert page.status_code == 200 and order["id"] not in page.text
-    approve_direct(db, order=order["id"])
+    data["status"]="paid";ps.apply_transaction(db,order["id"],data,START)
     page = client.get("/painel/configuracoes/plano?q=CLIPCA-1&only_unpaid=1")
     assert "Cancelar solicitação" not in page.text
     assert (

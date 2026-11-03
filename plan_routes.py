@@ -39,6 +39,7 @@ LABELS = {
     "failed": "Não foi possível criar a cobrança",
     "refunded": "Estornado / em tratamento",
     "manual_approved": "Participação validada manualmente",
+    "cancel_requested": "Cancelamento aguardando verificação",
     "admin_cancelled": "Solicitação cancelada pelo administrador",
 }
 
@@ -313,42 +314,11 @@ def install(
             return redirect(url_for("plans.client_hub"))
         if mode != "create":
             return redirect(url_for("plans.payment", oid=order["id"]))
-        created = False
-        try:
-            api = gateway(app)
-            data = api.create(order, person, card)
-            created = True
-            tid = service.attach_creation_id(db(), order["id"], data, now())
-            # Card In's documented POST is a summary without the callback.
-            # A fresh detail GET proves the complete binding before any grant.
-            service.apply_transaction(db(), order["id"], api.get(tid), now())
-        except (GatewayError, DatabaseIntegrityError) as error:
-            db().rollback()
-            code = getattr(error, "code", "database_conflict")
-            state = (
-                "uncertain"
-                if getattr(error, "uncertain", False) or created
-                else "declined" if code == "declined" else "failed"
-            )
-            db().execute(
-                "UPDATE plan_orders SET state=?,error_code=? WHERE id=? AND state=?",
-                (state, code, order["id"], "creating"),
-            )
-            db().commit()
-            flash(
-                (
-                    "A criação precisa ser confirmada com a FastFlow. Consulte este pedido; não faremos outra cobrança automaticamente."
-                    if state == "uncertain"
-                    else (
-                        str(error)
-                        if isinstance(error, GatewayError)
-                        else "Não foi possível concluir. Consulte este pedido antes de tentar outro pagamento."
-                    )
-                ),
-                "error",
-            )
-        finally:
-            card = None
+        import plan_charge
+
+        problem = plan_charge.start(db(), app, order, person, now(), card)
+        if problem:
+            flash(problem, "error")
         return redirect(url_for("plans.payment", oid=order["id"]))
 
     @bp.get("/cliente/plano/pagamentos/<oid>")
@@ -378,9 +348,10 @@ def install(
             "done": order["state"] not in service.OPEN_STATES,
         }
 
+    @bp.post("/webhooks/fastflow/retiradas/<rid>")
     @bp.post("/webhooks/fastflow")
     @bp.post("/webhooks/fastflow/pedidos/<oid>")
-    def webhook(oid=None):
+    def webhook(oid=None, rid=None):
         cfg = settings()
         if not cfg.ready:
             return "", 503
@@ -427,6 +398,17 @@ def install(
             )
         except (ValueError, TypeError, AttributeError):
             return "", 400
+        import pickup_payments
+
+        if rid or (
+            not oid
+            and db()
+            .execute(
+                "SELECT 1 FROM pickup_payment_orders WHERE transaction_id=?", (tid,)
+            )
+            .fetchone()
+        ):
+            return pickup_payments.webhook(db(), app, rid, tid, event, raw, now())
         order = (
             db()
             .execute(
@@ -461,6 +443,8 @@ def install(
         try:
             fresh = gateway(app).get(tid)
             service.apply_transaction(db(), order["id"], fresh, now())
+            if event == "transaction.paid" and fresh["status"] != "paid":
+                return "", 202
             db().execute(
                 "UPDATE plan_payment_events SET outcome='processed',processed_at=?,reason=NULL WHERE event_key=?",
                 (service.iso(now()), key),
@@ -501,7 +485,7 @@ def install(
         matching_orders = "%" + search.lower() + "%"
         only_unpaid = request.args.get("only_unpaid") == "1"
         order_filter = (
-            " AND o.state IN ('creating','uncertain','pending','approved','under_review','expired','cancelled','failed','declined') AND o.paid_at IS NULL AND NOT EXISTS(SELECT 1 FROM plan_cycles pc WHERE pc.order_id=o.id)"
+            " AND o.state IN ('creating','uncertain','pending','approved','under_review','expired','cancelled','failed','declined','cancel_requested') AND o.paid_at IS NULL AND NOT EXISTS(SELECT 1 FROM plan_cycles pc WHERE pc.order_id=o.id)"
             if only_unpaid
             else ""
         )
@@ -618,6 +602,20 @@ def install(
                         )
                     if missing:
                         raise ValueError("Regularize antes: " + "; ".join(missing))
+                    if request.form.get("payment_method") == "Pix Fast":
+                        oid = administration.create_fast(
+                            db(),
+                            app,
+                            person,
+                            order,
+                            actor(),
+                            request.form.get("reason", ""),
+                            operation_id,
+                            now(),
+                            settings(),
+                            request.form.get("cycle_key"),
+                        )
+                        return redirect(url_for("plans.admin_payment", oid=oid))
                     administration.approve(
                         db(),
                         person["id"],
@@ -628,9 +626,16 @@ def install(
                         now(),
                         settings(),
                         expected_key=request.form.get("cycle_key"),
+                        payment_method=request.form.get("payment_method"),
+                        payment_confirmed=request.form.get("payment_confirmed")
+                        == "yes",
                     )
                     flash(
-                        "Participação no plano validada manualmente. O histórico foi preservado.",
+                        (
+                            "Renovação confirmada com sucesso"
+                            if current
+                            else "Plano ativado com sucesso"
+                        ),
                         "success",
                     )
                 else:
@@ -644,9 +649,21 @@ def install(
                         now(),
                         settings(),
                     )
+                    closed = (
+                        db()
+                        .execute(
+                            "SELECT state FROM plan_orders WHERE id=?", (order["id"],)
+                        )
+                        .fetchone()["state"]
+                        == "admin_cancelled"
+                    )
                     flash(
-                        "Solicitação não paga cancelada. O histórico foi preservado.",
-                        "success",
+                        (
+                            "Solicitação não paga cancelada. O histórico foi preservado."
+                            if closed
+                            else "Cancelamento aguardando verificação. A cobrança externa continua em acompanhamento."
+                        ),
+                        "success" if closed else "info",
                     )
                 return redirect(url_for("plans.admin_hub"))
             except (ValueError, GatewayError) as failure:
@@ -655,8 +672,35 @@ def install(
             except DatabaseIntegrityError:
                 db().rollback()
                 error = "O pedido mudou durante a operação. Atualize a página para conferir o estado atual."
+        setting = (
+            db()
+            .execute(
+                "SELECT pix_key,pix_key_type,pix_receiver_name FROM settings WHERE id=1"
+            )
+            .fetchone()
+        )
+        ai_code = None
+        if setting["pix_key_type"] == "CNPJ" and setting["pix_receiver_name"]:
+            from core import pix_payload
+
+            ai_code = pix_payload(
+                setting["pix_key"],
+                setting["pix_receiver_name"],
+                service.public_offer()["monthly_price"],
+            )
         return render_template(
             "plan_admin_decision.html",
+            preview_start=service.iso(
+                service.parse(current["ends_at"]) if current else now()
+            ),
+            preview_end=service.iso(
+                service.month_after(
+                    service.parse(current["ends_at"]) if current else now(),
+                    current["anchor_day"] if current else None,
+                )
+            ),
+            ai_code=ai_code,
+            ai_qr=qr_data(ai_code) if ai_code else None,
             person=person,
             order=order,
             action=action,
@@ -700,6 +744,51 @@ def install(
         )
         return decision_screen(person, order, action)
 
+    @bp.route("/painel/configuracoes/plano/pagamentos/<oid>", methods=["GET", "POST"])
+    @admin_required
+    def admin_payment(oid):
+        admin()
+        item = get_order(oid)
+        refresh(db(), app, oid, now())
+        item = get_order(oid)
+        person = (
+            db()
+            .execute(
+                "SELECT name,public_id FROM clients WHERE id=?", (item["client_id"],)
+            )
+            .fetchone()
+        )
+        cycle = (
+            db()
+            .execute("SELECT * FROM plan_cycles WHERE order_id=?", (oid,))
+            .fetchone()
+        )
+        return render_template(
+            "plan_admin_payment.html",
+            order=item,
+            person=person,
+            cycle=cycle,
+            labels=LABELS,
+            qr=(
+                qr_data(item["qr_text"])
+                if item["qr_text"] and item["state"] in service.OPEN_STATES
+                else None
+            ),
+        )
+
+    @bp.get("/painel/configuracoes/plano/pagamentos/<oid>/status")
+    @admin_required
+    def admin_payment_status(oid):
+        admin()
+        get_order(oid)
+        refresh(db(), app, oid, now())
+        item = get_order(oid)
+        return {
+            "state": item["state"],
+            "label": LABELS.get(item["state"], "Em consulta"),
+            "done": item["state"] not in service.OPEN_STATES,
+        }
+
     @bp.post("/painel/configuracoes/plano/verificar-provedor")
     @admin_required
     def verify_provider():
@@ -721,10 +810,13 @@ def install(
     @admin_required
     def admin_check(oid):
         admin()
-        order=get_order(oid)
-        if order['method']=='administrative':
-            flash('Esta participação foi validada manualmente e não possui cobrança FastFlow para consulta.','info')
-            return redirect(url_for('plans.admin_hub'))
+        order = get_order(oid)
+        if order["method"] == "administrative":
+            flash(
+                "Esta participação foi validada manualmente e não possui cobrança FastFlow para consulta.",
+                "info",
+            )
+            return redirect(url_for("plans.admin_hub"))
         checked = refresh(db(), app, oid, now(), force=True)
         flash(
             (
@@ -735,6 +827,57 @@ def install(
             "info",
         )
         return redirect(url_for("plans.admin_hub"))
+
+    def receipt_response(item):
+        from flask import send_file
+        from plan_receipt import build
+
+        person = (
+            db()
+            .execute(
+                "SELECT name,public_id FROM clients WHERE id=?", (item["client_id"],)
+            )
+            .fetchone()
+        )
+        cycle = (
+            db()
+            .execute("SELECT * FROM plan_cycles WHERE order_id=?", (item["id"],))
+            .fetchone()
+        )
+        method = item.get("local_method") or (
+            "Pix" if item["method"] == "pix" else "Validação administrativa"
+        )
+        decision = (
+            db()
+            .execute(
+                "SELECT actor_name FROM plan_admin_decisions WHERE order_id=? ORDER BY created_at DESC LIMIT 1",
+                (item["id"],),
+            )
+            .fetchone()
+        )
+        return send_file(
+            build(
+                item,
+                person,
+                cycle,
+                method,
+                decision["actor_name"] if decision else None,
+            ),
+            mimetype="application/pdf",
+            as_attachment=True,
+            download_name="comprovante-plano-" + item["id"] + ".pdf",
+        )
+
+    @bp.get("/cliente/plano/pagamentos/<oid>/comprovante.pdf")
+    @client_required
+    def receipt(oid):
+        return receipt_response(get_order(oid, owner()["id"]))
+
+    @bp.get("/painel/configuracoes/plano/pagamentos/<oid>/comprovante.pdf")
+    @admin_required
+    def admin_receipt(oid):
+        admin()
+        return receipt_response(get_order(oid))
 
     @bp.get("/plano/me-guarde-mais/logo")
     def logo():
@@ -775,6 +918,16 @@ def install(
         return {
             "plan_feature_visible": settings().active or bool(has_history),
             "plan_labels": LABELS,
+            "plan_payment_method": lambda order: dict(order).get("local_method")
+            or (
+                "Pix"
+                if order["method"] == "pix"
+                else (
+                    "Validação administrativa"
+                    if order["method"] == "administrative"
+                    else "Cartão"
+                )
+            ),
             "public_plan_offer": service.public_offer(),
             "public_plan_logo": bool(
                 app.config.get("ME_GUARDE_MAIS_LOGO_PATH")

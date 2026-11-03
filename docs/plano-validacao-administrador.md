@@ -1,56 +1,34 @@
-# Validação manual e cancelamento de solicitações do plano
+# Plano: ativação, renovação e cancelamento pelo administrador
 
-Acesso: **Área do Ponto → Configurações → Plano ME GUARDE Mais**. Disponível somente a administrador ativo com permissão de configurações, ou ao acesso administrativo legado enquanto habilitado. Cliente, gerente e atendente não podem executar as ações, inclusive por POST direto.
+Acesso: **Área do Ponto → Configurações → Plano ME GUARDE Mais**. As ações exigem administrador ativo com permissão de configurações; as validações também ocorrem no servidor. Cadastro, assinatura, aceite, confirmação por e-mail e autorizações do cliente continuam obrigatórios conforme as regras existentes.
 
-## Validar a participação de um cliente
+## Ativar ou renovar
 
-1. Em **Validar participação de clientes**, busque por nome, ID ou e-mail. A lista é paginada e permite localizar todos os clientes cadastrados, mesmo sem pedido de plano anterior.
-2. Clique em **Validar participação**. Para uma solicitação já existente, também é possível usar **Validar manualmente** na linha do pedido.
-3. Confira cliente, pedido, ciclo atual e efeito da validação. Informe um motivo de 10 a 600 caracteres, marque a confirmação e clique em **Confirmar validação manual**. **Voltar sem alterar** não grava nada.
-4. A primeira participação começa na validação. Se há ciclo vigente, a validação será uma renovação a partir do fim dele; os 10 créditos do próximo ciclo não ficam disponíveis antecipadamente. Se o próximo ciclo já está confirmado, não é criado outro. Créditos não acumulam e continuam sendo consumidos somente no recebimento; pacotes anteriores não são reprecificados.
+1. Busque o cliente por nome, ID ou e-mail e abra **Validar participação** (ou a ação da solicitação existente).
+2. Confira cliente, ID, pedido, R$ 33,90, 10 créditos e período previsto.
+3. Escolha exatamente uma modalidade:
+   - **Pix AI:** QR Code/Copia e Cola da chave CNPJ configurada. Confira o recebimento na conta, marque a confirmação e utilize **Confirmar pagamento e ativar plano**. Não consulta a API.
+   - **Dinheiro:** confirme o recebimento e utilize o mesmo botão. Não consulta a API.
+   - **Pix Fast:** **Gerar Pix Fast** cria ou reutiliza uma cobrança. Acompanhe QR Code, validade e situação, com **Consultar pagamento**. Somente pagamento efetivo confirmado pela API libera o plano; não há substituição por confirmação manual.
+4. Informe o motivo e confirme a operação. Voltar não grava nada.
 
-A participação recebe o estado **Participação validada manualmente**, separado de pagamento confirmado na FastFlow. A ação não cria cobrança, não envia dinheiro e não muda o status da transação no provedor. Nos pedidos criados diretamente pelo administrador, a origem é `administrative`, `paid_at` fica vazio e `accepted_at` não é preenchido como se o cliente tivesse aceitado as regras. O valor do plano permanece R$ 33,90 como referência; a decisão não é apresentada como liquidação financeira.
+O primeiro ciclo começa na confirmação do pagamento. Renovação antecipada preserva o ciclo atual e reserva o próximo sem antecipar créditos. Há proteção contra repetição e concorrência. Créditos são consumidos no recebimento, nunca novamente na retirada. Uma cobrança FastFlow pendente precisa ser resolvida antes de mudar a modalidade.
 
-A conta precisa estar ativa e cumprir as validações cadastrais/contratuais já existentes, inclusive pendências que restrinjam a função do plano. O administrador não assina, confirma e-mail ou aceita autorizações pelo cliente. A prévia informa o que precisa ser regularizado; o cliente continua usando o fluxo existente na própria Área do Cliente.
+Novos recebimentos manuais registram modalidade, valor, administrador e `manual_paid_at`, separados de `paid_at` do provedor. O administrador não preenche `accepted_at` em nome do cliente. Validações administrativas históricas sem recebimento registrado permanecem identificadas como tais, sem serem transformadas em pagamentos. Novos comprovantes PDF ficam disponíveis ao cliente titular e ao administrador.
 
-Se já existe solicitação para aquele ciclo, ela é reaproveitada. Reenvios da mesma confirmação e operações concorrentes não duplicam pedidos, ciclos ou créditos: há identificador persistente da operação, travamento por cliente, vínculo único do ciclo e comparação com o ciclo mostrado na prévia. Uma segunda renovação exige uma nova prévia consciente.
+## Cancelar contratação não paga
 
-Caso a FastFlow confirme depois um pedido validado manualmente, o pagamento e sua data são registrados, mas o ciclo já criado e seus créditos não são duplicados. A decisão administrativa permanece no histórico. Expiração/cancelamento da cobrança ainda não paga não apaga a participação já autorizada; estorno ou nova análise após pagamento continuam sujeitos à revisão prevista no sistema.
+Use o filtro de solicitações não pagas e o botão existente **Cancelar solicitação**. Confira cliente e pedido, informe o motivo e confirme.
 
-## Cancelar uma solicitação não paga
+- Sem transação e com evidência de que a criação não ocorreu, encerra somente o pedido local.
+- Havendo cobrança, consulta e valida os dados. Se paga ou com ciclo liberado, recusa o cancelamento simples.
+- Para cobrança aberta, utiliza o método documentado `PUT /transactions/{id}`, com `status=cancelled`, e consulta novamente. O fluxo anterior utilizava DELETE; a nova chamada não pressupõe autorização da conta do provedor.
+- Consulta indisponível, histórico incerto ou recusa remota mantém **Cancelamento aguardando verificação**. O pedido não é apresentado como cancelado com sucesso. A ação existente permite verificar novamente; o job também acompanha a situação.
 
-1. Use **Somente solicitações não pagas**, a busca e a paginação de solicitações para localizar o pedido.
-2. Clique em **Cancelar solicitação**, confira cliente/transação, informe o motivo, marque a confirmação e clique em **Confirmar cancelamento**.
-3. Havendo cobrança conhecida, o servidor consulta os detalhes da FastFlow, com as mesmas verificações de valor, provedor, método e vínculo. Se estiver paga, registra a confirmação real e recusa o cancelamento. Se ainda estiver aberta, usa o endpoint documentado `DELETE /transactions/{id}` e consulta de novo para confirmar `cancelled` ou `expired` antes de encerrar localmente.
-4. Se a API estiver indisponível, a situação continuar incerta ou a transação não tiver sido identificada, a solicitação é preservada para nova consulta. Não é declarada cancelada sem confirmação. Tentativas definitivamente recusadas/falhas e sem identificador podem ser encerradas localmente, sem chamadas ao provedor.
+O histórico registra administrador, data, motivo e resultado. Falhas HTTP incluem apenas método, endpoint e código HTTP, sem credenciais ou corpo da resposta. A causa HTTP exata da instalação Oracle não pôde ser observada neste ambiente; esses diagnósticos permitem identificá-la na próxima tentativa. Recusa de permissão no provedor exige conferência da conta FastFlow.
 
-O cancelamento recebe estado **Solicitação cancelada pelo administrador** e não apaga o pedido, transação ou evidências. Pedidos pagos, estornados ou com ciclo/participação já liberado não podem ser tratados como “não pagos” para cancelamento. Repetir a confirmação não envia novo cancelamento nem regrava o motivo anterior.
+Pagamento posterior ao cancelamento fica sinalizado para análise (`payment_after_cancellation`), sem ativação automática nem novos créditos. Pagamento externo adicional após confirmação manual fica sinalizado como possível duplicidade, sem novo ciclo. Não há estorno automático, exclusão ou reescrita de comprovantes históricos.
 
-Um pagamento tardio comprovado pela API depois do cancelamento fica registrado para conferência (`payment_after_cancellation`), com a data, mantendo o estado cancelado. Não reabre o plano nem concede créditos automaticamente; a tela orienta o cliente a procurar o ponto. O atendimento deve conferir e resolver o caso, sem estorno automático ou exclusão do histórico. Webhooks antigos/repetidos não revertem essa proteção.
+## Implantação e validação
 
-## Histórico e dados preservados
-
-**Histórico das decisões administrativas** mostra cliente, pedido, decisão, administrador identificado, data/hora, motivo e estados anterior/final. Os registros ficam em `plan_admin_decisions`, com referência aos pedidos/clientes e identificação preservada do administrador. Não há ação para editar ou apagar esse histórico.
-
-A alteração é aditiva: cria tabela de decisões e índice de unicidade que considera a participação manual. Mantém dados, contratos, assinaturas, pacotes, pagamentos anteriores e configurações. A retirada de pacotes já recebidos permanece disponível, e o valor base já coberto não volta a ser cobrado. A reconciliação continua usando a API para cobranças reais, e disponibiliza ciclos manuais devidos mesmo se novos pagamentos FastFlow estiverem desabilitados. Renovação manual confirmada também suprime novos lembretes do vencimento anterior.
-
-## Implantação
-
-Não há nova variável, credencial, biblioteca ou timer. Preserve `/etc/ponto-coleta/site.env`, Gmail, Google, FastFlow e os agendamentos da Oracle. Após revisão/merge, backup habitual e atualização do checkout na pasta real do sistema:
-
-```bash
-git status --short
-git switch main
-git pull --ff-only origin main
-.venv/bin/python -m pip check
-sudo systemctl restart ponto-coleta.service
-sudo systemctl status ponto-coleta.service --no-pager
-```
-
-A inicialização cria as estruturas adicionais idempotentemente no banco persistente; como no restante do sistema, faça a inicialização do schema de forma sequencial antes de iniciar novos workers simultâneos. O script de migração SQLite → PostgreSQL inclui o novo histórico. A Oracle não foi acessada nem reiniciada por esta implementação.
-
-## Verificação
-
-**339 testes aprovados** na suíte completa com SQLite e PostgreSQL 16 isolado. Testes com clientes/administradores fictícios, SQLite temporário, PostgreSQL 16 isolado e FastFlow/Gmail simulados: validação com/sem solicitação, origem identificada sem falso pagamento/aceite, restrições cadastrais, primeiro ciclo e renovação, concorrência/duplo envio, confirmação/reason/CSRF, pagamento durante cancelamento, falha de rede, recusa de cancelar pagos, cancelamento confirmado, pagamento tardio, histórico persistente e permissões.
-
-Chromium com telas de 320, 360, 390, 430, 768, 1024 e 1440 px: busca, lista, prévia, confirmação manual, cancelamento por toque e histórico, sem rolagem horizontal da página ou erros JavaScript. A emulação não substitui aparelhos físicos/Safari. APIs e envio de e-mail reais não são usados nos testes.
+Consulte [Área do Cliente e pagamentos](area-cliente-pagamentos.md) para implantação, testes e limites de homologação. Não há novas credenciais ou agendamentos.

@@ -23,11 +23,17 @@ class GatewayError(Exception):
         message="FastFlow temporariamente indisponível. Tente consultar o pagamento novamente.",
         *,
         uncertain=False,
-        code="unavailable"
+        code="unavailable",
+        http_status=None,
+        http_method=None,
+        http_endpoint=None
     ):
         super().__init__(message)
         self.uncertain = uncertain
         self.code = code
+        self.http_status = http_status
+        self.http_method = http_method
+        self.http_endpoint = http_endpoint
 
 
 def enabled(value):
@@ -102,6 +108,17 @@ class FastFlow:
     def request(self, method, path, *, payload=None, params=None):
         if self.rate_guard:
             self.rate_guard(method, path)
+        status = None
+
+        def failure(*args, **kwargs):
+            return GatewayError(
+                *args,
+                http_status=status,
+                http_method=method,
+                http_endpoint=path,
+                **kwargs
+            )
+
         try:
             response = requests.request(
                 method,
@@ -116,44 +133,43 @@ class FastFlow:
                 allow_redirects=False,
             )
         except requests.RequestException:
-            raise GatewayError(uncertain=method == "POST") from None
+            raise failure(uncertain=method == "POST") from None
+        status = response.status_code
         if response.status_code == 402:
-            raise GatewayError(
+            raise failure(
                 "Cartão recusado pelo emissor. Confira os dados ou escolha Pix.",
                 code="declined",
             )
         if response.status_code == 403 and path.startswith("/card-in"):
-            raise GatewayError(
+            raise failure(
                 "Cartão não habilitado na conta FastFlow. O Pix continua disponível.",
                 code="card_disabled",
             )
         if response.status_code == 429:
-            raise GatewayError(
+            raise failure(
                 "Limite de consultas da FastFlow atingido. Aguarde antes de tentar novamente.",
                 code="rate_limited",
             )
         if response.status_code >= 500 or 300 <= response.status_code < 400:
-            raise GatewayError(uncertain=method == "POST")
+            raise failure(uncertain=method == "POST")
         if response.status_code in (400, 401, 403, 404, 422):
-            raise GatewayError(
+            raise failure(
                 "A FastFlow não autorizou a operação. Confira a configuração e os dados do cadastro.",
                 code="rejected",
             )
         try:
             data = response.json()
         except (ValueError, TypeError):
-            raise GatewayError(
-                uncertain=method == "POST", code="invalid_response"
-            ) from None
+            raise failure(uncertain=method == "POST", code="invalid_response") from None
         if (
             not 200 <= response.status_code < 300
             or not isinstance(data, dict)
             or data.get("success") is not True
         ):
-            raise GatewayError(uncertain=method == "POST", code="invalid_response")
+            raise failure(uncertain=method == "POST", code="invalid_response")
         result = data.get("data")
         if not isinstance(result, (dict, list)):
-            raise GatewayError(uncertain=method == "POST", code="invalid_response")
+            raise failure(uncertain=method == "POST", code="invalid_response")
         return result
 
     def provider(self):
@@ -173,7 +189,8 @@ class FastFlow:
 
     def create(self, order, owner, card=None):
         self.provider()
-        callback = self.settings.callback(order["id"])
+        callback = order.get("callback_url") or self.settings.callback(order["id"])
+        amount = order.get("amount_cents", AMOUNT_CENTS) / 100
         if order["method"] == "card":
             if not self.card_available():
                 raise GatewayError(
@@ -184,7 +201,7 @@ class FastFlow:
                 "POST",
                 "/card-in/charges",
                 payload={
-                    "amount": 33.90,
+                    "amount": amount,
                     "installments": 1,
                     "card": card,
                     "payer_name": owner["name"],
@@ -199,7 +216,7 @@ class FastFlow:
             "POST",
             "/transactions",
             payload={
-                "amount": 33.90,
+                "amount": amount,
                 "user": {
                     "name": owner["name"],
                     "cpf_cnpj": re.sub(r"\D", "", owner["cpf"]),
@@ -222,7 +239,11 @@ class FastFlow:
 
     def cancel(self, identifier):
         # This endpoint cancels an unpaid charge; it never marks a TX paid.
-        return self.request("DELETE", "/transactions/" + transaction_id(identifier))
+        return self.request(
+            "PUT",
+            "/transactions/" + transaction_id(identifier),
+            payload={"status": "cancelled"},
+        )
 
     def find(self, order):
         # The order-specific documented callback is the correlation identifier
@@ -234,7 +255,7 @@ class FastFlow:
                 "/transactions",
                 params={
                     "date_from": order["created_at"][:10],
-                    "payment_method": order["method"],
+                    "payment_method": order.get("method", "pix"),
                     "page": page,
                     "limit": 100,
                 },
@@ -244,7 +265,9 @@ class FastFlow:
             ):
                 raise GatewayError(code="invalid_response")
             for tx in result["transactions"]:
-                if tx.get("notification_url") == self.settings.callback(order["id"]):
+                if tx.get("notification_url") == (
+                    order.get("callback_url") or self.settings.callback(order["id"])
+                ):
                     matches.append(tx)
             pagination = result.get("pagination") or {}
             try:

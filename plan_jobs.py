@@ -24,6 +24,8 @@ def reconcile(db, config, value, limit=12):
         try:
             data = plan_routes.gateway(app).get(event["transaction_id"])
             service.apply_transaction(db, event["order_id"], data, value)
+            if event["event_type"] == "transaction.paid" and data["status"] != "paid":
+                continue
             db.execute(
                 "UPDATE plan_payment_events SET outcome='processed',processed_at=?,reason=NULL WHERE id=?",
                 (service.iso(value), event["id"]),
@@ -51,7 +53,7 @@ def reconcile(db, config, value, limit=12):
     rows = (
         db.execute(
             """SELECT id FROM plan_orders WHERE
-        (state IN ('creating','uncertain','pending','approved','under_review') AND (check_after IS NULL OR check_after<=?))
+        (state IN ('creating','uncertain','pending','approved','under_review','cancel_requested') AND (check_after IS NULL OR check_after<=?))
         OR (state IN ('paid','manual_approved','admin_cancelled') AND method!='administrative' AND (checked_at IS NULL OR checked_at<?))
         ORDER BY COALESCE(checked_at,''),created_at LIMIT ?""",
             (service.iso(value), service.iso(value - timedelta(hours=6)), limit),
@@ -61,6 +63,10 @@ def reconcile(db, config, value, limit=12):
     )
     for row in rows:
         count += int(plan_routes.refresh(db, app, row["id"], value))
+    if ready:
+        import pickup_payments
+
+        pickup_payments.reconcile(db, app, value)
     for account in db.execute(
         "SELECT DISTINCT client_id FROM plan_cycles WHERE granted_at IS NULL AND suspended=0 AND starts_at<=? AND ends_at>?",
         (service.iso(value), service.iso(value)),

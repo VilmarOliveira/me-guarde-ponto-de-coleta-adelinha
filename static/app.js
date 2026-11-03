@@ -325,16 +325,18 @@ async function updatePayment() {
   const method = pickupForm.querySelector('[name="payment_method"]:checked')?.value;
   const ids = [...document.querySelectorAll('[name="package_ids"]:checked')];
   paymentBox.hidden = !method || !ids.length;
-  submitPickup.textContent = !method ? 'Selecione a forma de pagamento'
-    : method === 'Pix' ? 'Confirmar pagamento Pix e concluir retirada'
-      : 'Confirmar recebimento em dinheiro e concluir retirada';
-  document.querySelector('#payment-confirmation-text').textContent = method === 'Pix'
+  submitPickup.textContent = 'Confirmar retirada';
+  const fastArea=document.querySelector('#pickup-fast-area');
+  if(fastArea)fastArea.hidden=method!=='Pix Fast';
+  submitPickup.disabled=method==='Pix Fast';
+  document.querySelector('#payment-confirmation-text').textContent = method === 'Pix AI'
     ? 'Conferi o pagamento Pix na conta e confirmo o recebimento.'
     : 'Conferi o recebimento em dinheiro.';
-  pixArea.hidden = method !== 'Pix';
+  pixArea.hidden = method !== 'Pix AI';
   if (!method || !ids.length) return;
   const body = new FormData();
   ids.forEach((checkbox) => body.append('package_ids', checkbox.value));
+  body.append('payment_method',method);
   body.append('discount_amount', discountAmount?.value || '');
   body.append('discount_percent', discountPercent?.value || '');
   body.append('surcharge_amount', surchargeAmount?.value || '0');
@@ -343,14 +345,24 @@ async function updatePayment() {
   const response = await fetch('/painel/retirada/resumo', { method: 'POST', body });
   const data = await response.json();
   if (currentRequest !== paymentRequest) return;
-  if (!response.ok) { alert(data.error); return; }
+  const error=document.querySelector('#pickup-payment-error');error.hidden=response.ok;error.textContent=data.error||'';
+  const link=document.querySelector('#existing-pickup-fast');link.hidden=!data.payment_url;if(data.payment_url)link.href=data.payment_url;
+  if (!response.ok) {pixArea.hidden=true;submitPickup.disabled=true;if(data.payment_url)fastArea.hidden=false;return;}
+
   document.querySelector('#pickup-package-total').textContent = data.package_total_display;
   document.querySelector('#pickup-discount').textContent = data.discount_display;
   document.querySelector('#pickup-surcharge').textContent = data.surcharge_display;
   document.querySelector('#pickup-total').textContent = data.total_display;
-  if (method === 'Pix') {
-    if (!data.pix_configured) {
-      pixArea.innerHTML = '<p class="flash error">Configure o nome do recebedor Pix antes de continuar.</p>';
+  if(method==='Pix Fast'){
+    document.querySelector('#payment-confirmation-text').textContent=data.pix_zero_total?'Total zero: confiro a entrega sem cobrança.':'A entrega será confirmada na tela do Pix Fast após o pagamento.';
+    submitPickup.disabled=!data.pix_zero_total;
+    document.querySelector('#generate-pickup-fast').disabled=data.pix_zero_total;
+    document.querySelector('#pickup-fast-info').textContent=data.pix_zero_total?'Total zero: confirme a retirada sem gerar cobrança.':'Pagamento deve ser confirmado pela API antes da entrega.';
+  }
+  if (method === 'Pix AI') {
+    if(data.pix_zero_total){pixArea.hidden=true;submitPickup.disabled=false;document.querySelector('#pix-code').value='';document.querySelector('#pix-qr').removeAttribute('src');document.querySelector('#payment-confirmation-text').textContent='Total zero: confiro a entrega sem cobrança.';}
+    else if (!data.pix_configured) {
+      pixArea.hidden=true;submitPickup.disabled=!data.pix_zero_total;error.hidden=false;error.textContent='Configure a chave CNPJ e o nome do titular para usar Pix AI.';
     } else if (data.pix_zero_total) {
       document.querySelector('#pix-qr').removeAttribute('src');
       document.querySelector('#pix-code').value = '';
@@ -362,6 +374,16 @@ async function updatePayment() {
     }
   }
 }
+document.querySelector('#generate-pickup-fast')?.addEventListener('click',async(event)=>{
+  const button=event.currentTarget;button.disabled=true;
+  const old=document.querySelector('#existing-pickup-fast');if(old&&!old.hidden){location.assign(old.href);return;}
+  const body=new FormData(pickupForm);body.delete('package_ids');
+  document.querySelectorAll('[name="package_ids"]:checked').forEach(e=>body.append('package_ids',e.value));
+  try{const response=await fetch('/painel/retirada/pix-fast',{method:'POST',body});const data=await response.json();
+    if(!response.ok){alert(data.error);return;}location.assign(data.url);
+  }catch(_){alert('Criação em consulta. Consulte a solicitação existente antes de tentar novamente.');}
+  finally{button.disabled=false;}
+});
 document.querySelectorAll('[name="package_ids"], [name="payment_method"]').forEach((input) => input.addEventListener('change', updatePayment));
 let discountTimer;
 [[discountAmount, discountPercent], [discountPercent, discountAmount]].forEach(([field, other]) => {

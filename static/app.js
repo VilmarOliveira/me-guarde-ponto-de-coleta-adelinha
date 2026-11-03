@@ -185,6 +185,7 @@ function selectClient(id, name, publicId) {
   clientId.value = id;
   clientLabel.value = `${name} · ${publicId}`;
   clientLabel.classList.add('selected-client');
+  updatePackageCoverage();
   if (clientResults) clientResults.replaceChildren();
 }
 
@@ -202,6 +203,7 @@ if (clientSearch && clientResults) {
     clearTimeout(timer);
     // Alterar a pesquisa invalida uma seleção anterior para evitar vínculo acidental.
     clientId.value = '';
+    updatePackageCoverage();
     clientLabel.value = '';
     clientLabel.classList.remove('selected-client');
     const query = clientSearch.value.trim();
@@ -240,6 +242,28 @@ if (clientSearch && clientResults) {
     }, 250);
   });
 }
+
+let coverageRequest = 0;
+async function updatePackageCoverage() {
+  const form=document.querySelector('#package-form'), output=document.querySelector('#package-plan-preview');
+  if(!form || !output)return;
+  const requestId=++coverageRequest;
+  const dimensions=['width','height','length','weight'];
+  if(!clientId.value || dimensions.some(key=>!form.elements.namedItem(key).value.trim())){
+    output.textContent='Selecione o cliente e informe peso e medidas para consultar a categoria e a cobertura.';return;
+  }
+  output.textContent='Consultando cobertura…';
+  try{
+    const body=new FormData(form);body.set('csrf_token',document.querySelector('meta[name="csrf-token"]').content);
+    const response=await fetch('/painel/pacotes/cobertura',{method:'POST',body});const data=await response.json();
+    if(requestId!==coverageRequest)return;
+    output.textContent=response.ok?`${data.category} · ${data.message} Créditos debitados somente ao registrar o recebimento.`:data.error;
+  }catch(_error){if(requestId===coverageRequest)output.textContent='Não foi possível consultar a cobertura. Tente novamente; o recebimento será validado no servidor.';}
+}
+document.querySelector('#package-form')?.addEventListener('input',event=>{
+  if(['width','height','length','weight'].includes(event.target.name))updatePackageCoverage();
+});
+updatePackageCoverage();
 
 document.querySelector('#package-form')?.addEventListener('submit', (event) => {
   if (!clientId.value) {
@@ -333,10 +357,10 @@ async function updatePayment() {
     ? 'Conferi o pagamento Pix na conta e confirmo o recebimento.'
     : 'Conferi o recebimento em dinheiro.';
   pixArea.hidden = method !== 'Pix AI';
-  if (!method || !ids.length) return;
+  if (!ids.length) { const fast=pickupForm.querySelector('[value="Pix Fast"]');fast.disabled=false;document.querySelector('#pickup-fast-range').hidden=true;return; }
   const body = new FormData();
   ids.forEach((checkbox) => body.append('package_ids', checkbox.value));
-  body.append('payment_method',method);
+  body.append('payment_method',method||'');
   body.append('discount_amount', discountAmount?.value || '');
   body.append('discount_percent', discountPercent?.value || '');
   body.append('surcharge_amount', surchargeAmount?.value || '0');
@@ -349,6 +373,13 @@ async function updatePayment() {
   const link=document.querySelector('#existing-pickup-fast');link.hidden=!data.payment_url;if(data.payment_url)link.href=data.payment_url;
   if (!response.ok) {pixArea.hidden=true;submitPickup.disabled=true;if(data.payment_url)fastArea.hidden=false;return;}
 
+  const fastOption=pickupForm.querySelector('[value="Pix Fast"]');
+  const outside=data.total>0 && !data.fast_available;
+  fastOption.disabled=outside;
+  const range=document.querySelector('#pickup-fast-range');range.hidden=!outside;range.textContent=data.fast_range_message;
+  const coverage=document.querySelector('#pickup-coverage');coverage.replaceChildren();
+  (data.package_coverage||[]).forEach(item=>{const row=document.createElement('li');row.textContent=`Pacote #${item.id} · ${item.message} Atraso: ${new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL'}).format(item.late)}.`;coverage.append(row);});
+  if(method==='Pix Fast' && outside){fastOption.checked=false;fastArea.hidden=true;submitPickup.disabled=true;}
   document.querySelector('#pickup-package-total').textContent = data.package_total_display;
   document.querySelector('#pickup-discount').textContent = data.discount_display;
   document.querySelector('#pickup-surcharge').textContent = data.surcharge_display;
@@ -356,7 +387,7 @@ async function updatePayment() {
   if(method==='Pix Fast'){
     document.querySelector('#payment-confirmation-text').textContent=data.pix_zero_total?'Total zero: confiro a entrega sem cobrança.':'A entrega será confirmada na tela do Pix Fast após o pagamento.';
     submitPickup.disabled=!data.pix_zero_total;
-    document.querySelector('#generate-pickup-fast').disabled=data.pix_zero_total;
+    document.querySelector('#generate-pickup-fast').disabled=data.pix_zero_total||outside;
     document.querySelector('#pickup-fast-info').textContent=data.pix_zero_total?'Total zero: confirme a retirada sem gerar cobrança.':'Pagamento deve ser confirmado pela API antes da entrega.';
   }
   if (method === 'Pix AI') {

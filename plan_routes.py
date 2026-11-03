@@ -934,6 +934,7 @@ def install(
                 and Path(app.config["ME_GUARDE_MAIS_LOGO_PATH"]).is_file()
             ),
             "plan_package_coverage": lambda pid: service.coverage(db(), pid),
+            "package_coverage_description": lambda package: service.coverage_description(db(), package),
         }
 
     app.register_blueprint(bp)

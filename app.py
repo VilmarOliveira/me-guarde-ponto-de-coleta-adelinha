@@ -269,7 +269,7 @@ def create_app(test_config=None):
         permissions = {
             "client_search": "can_clients", "staff_client": "can_clients",
             "edit_client": "can_clients", "admin_client_password": "can_clients",
-            "remove_client": "can_clients", "add_package": "can_packages",
+            "remove_client": "can_clients", "add_package": "can_packages", "package_coverage_preview": "can_packages",
             "edit_package": "can_packages", "delete_package": "can_packages",
             "notify": "can_packages", "package_detail": "can_packages",
             "pickup_summary": "can_pickups", "pickup": "can_pickups", "receipt": "can_pickups",
@@ -1616,6 +1616,27 @@ def create_app(test_config=None):
             return redirect(url_for("client_login"))
         return render_template("set_password.html", invalid=False)
 
+    @app.post("/painel/pacotes/cobertura")
+    @login_required
+    def package_coverage_preview():
+        try:
+            client_id = int(request.form.get("client_id", ""))
+            numbers = [float(request.form.get(key, "").replace(",", ".")) for key in ("width", "height", "length", "weight")]
+            if not all(math.isfinite(n) and n > 0 for n in numbers):
+                raise ValueError("Informe peso e medidas maiores que zero.")
+            category, price = classify_package(*numbers)
+        except (ValueError, TypeError) as error:
+            return {"error": "Confira peso e medidas para identificar a categoria."}, 400
+        if not db().execute("SELECT id FROM clients WHERE id=? AND active=1", (client_id,)).fetchone():
+            return {"error": "Selecione um cliente ativo."}, 400
+        current, _, _ = plan_service.cycles(db(), client_id, now())
+        active = bool(current and not current["suspended"])
+        available = max(0, plan_service.CREDITS_PER_CYCLE-current["used_credits"]) if active else 0
+        cost = plan_service.SMALL_CREDIT_COST if category == "Pequeno" else plan_service.LARGE_CREDIT_COST
+        covered = active and available >= cost
+        message = (f"Plano ativo · {available} créditos disponíveis · Este pacote usará {cost} crédito{'s' if cost != 1 else ''}." if covered else "Recebimento avulso · R$ " + f"{price:.2f}".replace(".", ",") + ".")
+        return {"category": category, "active": active, "available": available, "credits": cost if covered else 0, "covered": covered, "price": 0 if covered else price, "message": message}
+
     @app.post("/pacotes")
     @login_required
     def add_package():
@@ -1761,7 +1782,7 @@ def create_app(test_config=None):
         receiver = setting["pix_receiver_name"]
         payload = pix_payload(setting["pix_key"], receiver, float(final_total)) if receiver and setting["pix_key_type"]=="CNPJ" and final_total > 0 else None
         qr_data = qr_code_data_url(payload) if payload else None
-        return {"payment_url":payment_url,"total": float(final_total), "package_total": package_total, "surcharge_amount": float(surcharge_amount),
+        return {"fast_available":pickup_payments.fast_available(float(final_total)),"fast_range_message":pickup_payments.FAST_RANGE_MESSAGE,"package_coverage":[{"id":p["id"],"message":plan_service.coverage_description(db(),p),"late":fees(p)["late_fee"]} for p in packages],"payment_url":payment_url,"total": float(final_total), "package_total": package_total, "surcharge_amount": float(surcharge_amount),
             "original_total": float(original_total), "discount_amount": float(discount_amount),
             "package_total_display": f"R$ {package_total:.2f}".replace(".", ","),
             "surcharge_display": f"R$ {surcharge_amount:.2f}".replace(".", ","),

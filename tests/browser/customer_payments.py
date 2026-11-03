@@ -158,6 +158,23 @@ with sync_playwright() as p:
     cookie(ctx, web)
     page.goto(origin + "/painel")
     page.wait_for_load_state("networkidle")
+    page.locator("#package-client-search").fill("CLIPCA-1")
+    page.locator("#package-client-results button").first.click()
+    for field in ("width", "height", "length"):
+        page.locator(f"#package-form [name={field}]").fill("10")
+    page.locator("#package-form [name=weight]").fill("1")
+    page.wait_for_function(
+        "document.querySelector('#package-plan-preview').textContent.includes('9 créditos disponíveis')"
+    )
+    assert "usará 1 crédito" in page.locator("#package-plan-preview").inner_text()
+    page.locator("#package-form [name=weight]").fill("12")
+    page.wait_for_function(
+        "document.querySelector('#package-plan-preview').textContent.includes('usará 2 créditos')"
+    )
+    assert (
+        db.execute("SELECT used_credits FROM plan_cycles").fetchone()["used_credits"]
+        == 1
+    )
     page.locator('[name=package_ids][value="1"]').check()
     page.locator('[name=payment_method][value="Pix AI"]').check()
     page.wait_for_timeout(400)
@@ -167,6 +184,38 @@ with sync_playwright() as p:
     page.locator('[name=payment_method][value="Dinheiro"]').check()
     page.wait_for_timeout(250)
     assert page.locator("#pix-area").is_hidden()
+    fast_option = page.locator('[name=payment_method][value="Pix Fast"]')
+    for value, allowed, total in [
+        ("0.91", False, "R$ 3,99"),
+        ("0.90", True, "R$ 4,00"),
+    ]:
+        page.locator("#discount-amount").fill(value)
+        page.wait_for_function(
+            "total=>document.querySelector('#pickup-total').textContent===total",
+            arg=total,
+        )
+        assert fast_option.is_enabled() is allowed
+        assert page.locator("#pickup-fast-range").is_visible() is (not allowed)
+    page.locator("#discount-amount").fill("")
+    page.locator("#surcharge-reason").fill("Teste fictício dos limites")
+    for value, allowed, total in [
+        ("995.10", True, "R$ 1000,00"),
+        ("995.11", False, "R$ 1000,01"),
+    ]:
+        page.locator("#surcharge-amount").fill(value)
+        page.wait_for_function(
+            "total=>document.querySelector('#pickup-total').textContent===total",
+            arg=total,
+        )
+        assert fast_option.is_enabled() is allowed
+    assert "R$ 1.000,00" in page.locator("#pickup-fast-range").inner_text()
+    assert "Avulso" in page.locator("#pickup-coverage").inner_text()
+    page.locator("#surcharge-amount").fill("0")
+    page.locator("#surcharge-reason").fill("")
+    page.wait_for_function(
+        "document.querySelector('#pickup-total').textContent==='R$ 4,90'"
+    )
+    assert fast_option.is_enabled()
     page.locator('[name=payment_method][value="Pix Fast"]').check()
     page.wait_for_timeout(250)
     page.get_by_role("button", name="Gerar Pix Fast", exact=True).click()
@@ -252,6 +301,8 @@ print(
         {
             "tabs_widths": [320, 360, 390, 430, 768, 1024, 1440],
             "three_methods": True,
+            "coverage_preview": True,
+            "pickup_fast_boundaries": [3.99, 4, 1000, 1000.01],
             "separate_physical_delivery": True,
             "signature_resize": True,
             "manual_renewal": True,

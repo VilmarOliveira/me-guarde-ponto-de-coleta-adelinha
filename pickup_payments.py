@@ -41,6 +41,13 @@ LABELS = {
     "delivered": "Pedido retirado com sucesso!",
 }
 METHODS = ("Pix AI", "Pix Fast", "Dinheiro")
+FAST_MIN_CENTS = 400
+FAST_MAX_CENTS = 100000
+FAST_RANGE_MESSAGE = "Pix Fast disponível para cobranças de R$ 4,00 a R$ 1.000,00. Escolha Pix AI ou Dinheiro."
+
+
+def fast_available(total):
+    return FAST_MIN_CENTS <= round(total * 100) <= FAST_MAX_CENTS
 
 
 def schema(db, id_type, ensure):
@@ -365,10 +372,8 @@ def assert_unreserved(db, ids, allowed=None):
 
 def reserve(db, packages, snapshot, actor, value, settings):
     cents = round(snapshot["final_total"] * 100)
-    if not 400 <= cents <= 500000:
-        raise ValueError(
-            "Pix Fast aceita valores de R$ 4,00 até R$ 5.000,00. Utilize Pix AI ou Dinheiro, sem alterar artificialmente o total."
-        )
+    if not fast_available(snapshot["final_total"]):
+        raise ValueError(FAST_RANGE_MESSAGE)
     if len({p["client_id"] for p in packages}) != 1:
         raise ValueError(
             "Gere Pix Fast separadamente para cada cliente. Pix AI e Dinheiro mantêm a seleção conjunta."

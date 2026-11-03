@@ -310,3 +310,5 @@ A rota pública `/privacidade` e os links do rodapé organizam o acesso à polí
 ## Plano ME GUARDE Mais e FastFlow
 
 Base persistente de ciclos mensais, 10 créditos por R$ 33,90, consumo no recebimento, Pix e integração Card In com ativação controlada. Webhooks assinados, consulta independente à API, proteção contra duplicidade, histórico e lembretes Gmail. Não há débito automático. Veja [configuração completa na Oracle, PCI e homologação](docs/plano-fastflow-oracle.md). A integração fica desativada até configurar as variáveis e o webhook do provedor.
+
+A página inicial apresenta a oferta **Como prefere pagar?**, com plano mensal e valores avulsos derivados das regras do servidor. Nesta revisão, contratação/renovação somente por Pix; histórico Card In preservado. O webhook aceita testes de conectividade assinados (`test: true`) sem alterações financeiras. Veja [layout, retorno após login e implantação](docs/home-plano-webhook.md).

@@ -13,6 +13,8 @@ import requests
 BASE_URL = "https://fastdepix.space/api/v1"
 AMOUNT_CENTS = 3390
 PLAN_NAME = "Plano ME GUARDE Mais"
+# Current public offer is Pix-only. Preserve Card In data and implementation.
+CARD_CHECKOUT_AVAILABLE = False
 
 
 class GatewayError(Exception):
@@ -48,7 +50,8 @@ class Settings:
             config.get("FASTFLOW_WEBHOOK_SECRET", "").strip(),
             config.get("FASTFLOW_PUBLIC_ORIGIN", "").rstrip("/"),
             enabled(config.get("FASTFLOW_ENABLED", "0")),
-            enabled(config.get("FASTFLOW_CARD_ENABLED", "0")),
+            enabled(config.get("FASTFLOW_CARD_ENABLED", "0"))
+            and CARD_CHECKOUT_AVAILABLE,
             enabled(config.get("FASTFLOW_CARD_PCI_READY", "0")),
         )
 

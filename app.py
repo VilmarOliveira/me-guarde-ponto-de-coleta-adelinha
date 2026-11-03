@@ -1214,10 +1214,11 @@ def create_app(test_config=None):
         valid = bool(client and client["active"] and client["password_hash"] and check_password_hash(client["password_hash"], request.form.get("password", "")))
         record_login("client", cpf, valid)
         if valid:
+            destination = session.get("client_login_destination")
             session.clear()
             session["client_id"] = client["id"]
             session["client_session_version"] = client["session_version"]
-            return redirect(url_for("client_area"))
+            return redirect(url_for("plans.client_hub" if destination == "plan" else "client_area"))
         flash("CPF, e-mail ou senha inválidos. Se você ainda não possui senha, procure a equipe.", "error")
         return redirect(url_for("client_login"))
 

@@ -240,3 +240,15 @@ def test_google_session_uses_same_plan_eligibility_and_never_staff_permissions(s
     assert 'Rua residencial' in plan_routes.eligible(db,owner,datetime.now(TZ))
     assert client.get('/painel/configuracoes/plano').status_code==302
     db.close()
+
+
+def test_home_plan_intent_survives_google_and_secure_first_link(site):
+    app,client,path,state=site
+    assert client.get('/plano/assinar').location.endswith('/cliente/login')
+    assert 'Confirmar vínculo' in callback(site).text
+    response=client.post('/cliente/google/confirmar',data={'password':'senha-segura','csrf_token':csrf(client)})
+    assert response.location.endswith('/cliente/plano')
+    with client.session_transaction() as session:
+        assert session['client_auth_method']=='google' and not session.get('staff')
+        assert 'client_login_destination' not in session
+    assert client.get(response.location).status_code==200

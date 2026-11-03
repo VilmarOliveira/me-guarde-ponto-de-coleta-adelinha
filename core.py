@@ -8,6 +8,12 @@ import unicodedata
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
 TZ = ZoneInfo("America/Sao_Paulo")
+SMALL_PACKAGE_PRICE=4.90
+LARGE_PACKAGE_PRICE=9.90
+SMALL_PACKAGE_MAX_SUM=80
+LARGE_PACKAGE_MAX_SUM=150
+SMALL_PACKAGE_MAX_WEIGHT=10
+LARGE_PACKAGE_MAX_WEIGHT=20
 
 
 def valid_cpf(value):
@@ -90,11 +96,11 @@ def classify_package(width: float, height: float, length: float, weight: float):
     if min(dimensions) <= 0 or weight <= 0:
         raise ValueError("Medidas e peso devem ser maiores que zero.")
     dimension_sum = sum(dimensions)
-    if dimension_sum > 150 or weight > 20:
+    if dimension_sum > LARGE_PACKAGE_MAX_SUM or weight > LARGE_PACKAGE_MAX_WEIGHT:
         raise ValueError("Limite de 150 cm na soma e 20 kg.")
-    if dimension_sum <= 80 and weight <= 10:
-        return "Pequeno", 4.90
-    return "Grande", 9.90
+    if dimension_sum <= SMALL_PACKAGE_MAX_SUM and weight <= SMALL_PACKAGE_MAX_WEIGHT:
+        return "Pequeno", SMALL_PACKAGE_PRICE
+    return "Grande", LARGE_PACKAGE_PRICE
 
 
 def calculate_fees(base_price, notified_at=None, picked_at=None, today: date | None = None):

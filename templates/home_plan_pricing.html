@@ -1,0 +1,27 @@
+{% from 'icons.html' import icon %}{% set offer = public_plan_offer %}
+<section class="home-section payment-options" id="planos-e-precos" aria-labelledby="payment-options-title">
+<h2 id="payment-options-title">Como prefere pagar?</h2>
+<h3 class="payment-section-label"><span>PLANO MENSAL</span></h3>
+<article class="monthly-offer" aria-label="Plano ME GUARDE Mais">
+<div class="monthly-summary">
+{% if public_plan_logo %}<img class="monthly-brand" src="{{ url_for('plans.logo') }}" alt="ME GUARDE⁺ — Plano mensal" loading="lazy">{% else %}<div class="monthly-brand-text">ME GUARDE<sup>+</sup><small>PLANO MENSAL</small></div>{% endif %}
+<div class="monthly-price"><p><strong>R$ {{ '%.2f'|format(offer.monthly_price)|replace('.',',') }}</strong><span>/mês</span></p><b class="monthly-saving">{{ icon('tag') }} ECONOMIZE ATÉ {{ offer.saving_percent }}%</b></div>
+<div class="monthly-includes">{{ icon('box') }}<p><strong>Inclui até {{ offer.small_count }} pacotes pequenos ou {{ offer.large_count }} grandes por mês.</strong><br>Cada grande equivale a {{ offer.large_equivalent }} pequenos.</p></div>
+</div>
+<div class="monthly-benefits"><h4>Vantagens do plano</h4><ul>
+<li>{{ icon('tag') }}<span>Economize até {{ offer.saving_percent }}%*.</span></li>
+<li>{{ icon('check-circle') }}<span>Recebimento já pago para os pacotes incluídos.</span></li>
+<li>{{ icon('exchange') }}<span>Misture pacotes pequenos e grandes.</span></li>
+<li>{{ icon('monitor') }}<span>Acompanhe seu saldo pelo site.</span></li>
+<li>{{ icon('pix') }}<span>Renove por Pix, sem débito automático.</span></li>
+</ul><a class="button primary monthly-subscribe" href="{{ url_for('plans.subscribe_entry') }}">Assinar plano</a></div>
+</article>
+<p class="monthly-footnote"><em>*Com o uso completo do plano. Créditos não acumulam. Taxas de atraso à parte.</em></p>
+<div class="payment-or" aria-hidden="true"><span>OU</span></div>
+<h3 class="payment-section-label"><span>POR PACOTE</span></h3>
+<div class="single-package-prices">
+<article>{{ icon('box') }}<div><h4>Pequeno</h4><p class="single-package-value"><strong>R$ {{ '%.2f'|format(offer.small_price)|replace('.',',') }}</strong> por pacote</p><p>Soma de comprimento + largura + altura até {{ offer.small_sum }} cm e peso até {{ offer.small_weight }} kg.</p></div></article>
+<article>{{ icon('box') }}<div><h4>Grande</h4><p class="single-package-value"><strong>R$ {{ '%.2f'|format(offer.large_price)|replace('.',',') }}</strong> por pacote</p><p>Soma de comprimento + largura + altura até {{ offer.large_sum }} cm e peso até {{ offer.large_weight }} kg.</p></div></article>
+</div><p class="package-limits-note">Tanto a soma das medidas quanto o peso devem respeitar os limites da categoria.</p>
+<p class="payment-at-pickup">{{ icon('payment') }} <strong>Pagamento avulso na retirada.</strong></p>
+</section>

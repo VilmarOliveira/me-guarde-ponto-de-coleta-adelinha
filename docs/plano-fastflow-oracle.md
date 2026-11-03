@@ -1,6 +1,6 @@
 # Plano ME GUARDE Mais — FastFlow e Oracle
 
-Implementação de 3 de novembro de 2026. A `main` não tinha uma base de plano; a criação da base foi autorizada pelo responsável. Nenhum banco de produção, credencial, e-mail real ou cobrança real foi utilizado nesta entrega.
+Implementação de 3 de novembro de 2026. **Atualização da oferta: somente Pix para contratar/renovar. O checkout Card In está desabilitado no código, inclusive se variáveis antigas estiverem em `1`. Estrutura, dados e consultas de pagamentos antigos por cartão permanecem preservados. As instruções técnicas de cartão abaixo ficam como referência histórica e não habilitam o recurso nesta revisão.** A `main` não tinha uma base de plano; a criação da base foi autorizada pelo responsável. Nenhum banco de produção, credencial, e-mail real ou cobrança real foi utilizado nesta entrega.
 
 ## Comportamento implementado
 
@@ -63,7 +63,7 @@ Não use `cat site.env`, `printenv`, `set -x`, comandos com a chave literal ou `
    `https://pontodecoletaadl.servehttp.com/webhooks/fastflow/pedidos/<UUID_DO_PEDIDO>`.
    Libere essa família de caminhos HTTPS no proxy/firewall, sem login ou redirecionamento, preservando corpo e `X-Webhook-Signature`.
 5. O provedor envia `X-Webhook-Signature: sha256=<hex>` calculada com HMAC-SHA256 do **corpo original**. A aplicação confere em tempo constante, limita o corpo a 64 KB e só essa rota dispensa CSRF de navegador. Mantém CSRF nas ações humanas.
-6. Suporta payload direto e `{event,data}`. Callback individual e global podem duplicar: a aplicação deduplica e a concessão também é única no banco. Nunca usar a ausência de duplicata no callback como única proteção financeira.
+6. Suporta payload direto e `{event,data}`. Um objeto JSON assinado com `"test": true` recebe `200` imediatamente, mesmo sem transação; não consulta API ou banco financeiro, não cria pedido, ciclo, crédito ou evento financeiro. Assinatura inválida continua `401`; JSON inválido/não objeto continua `400`. Somente o booleano JSON `true` aciona essa verificação, após HMAC. Callback individual e global podem duplicar: a aplicação deduplica e a concessão também é única no banco. Nunca usar a ausência de duplicata no callback como única proteção financeira.
 7. Falha temporária da API deixa evento pendente persistido e responde `202`; a reconciliação o recupera. Assinatura inválida recebe `401`; corpo inválido `400`; excessivo `413`. Não há endpoint para administrador marcar pagamento como pago.
 
 ## Cartão: requisitos antes da ativação

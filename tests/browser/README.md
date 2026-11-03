@@ -161,10 +161,10 @@ PYTHONPATH=/tmp/adelinha-browser-py .venv/bin/python tests/browser/plan_fastflow
 ```
 
 Usa `/usr/bin/chromium`, verifica o plano em 320, 360, 390, 430, 768, 1024 e
-1440 px; formulário do cartão, QR Code Pix, botão de cópia por toque em contexto
+1440 px; seção pública de preços, retorno ao plano após login, bloqueio do cartão, QR Code Pix e botão de cópia por toque em contexto
 móvel, ativação, renovação antecipada sem liberação de créditos futuros e painel
 administrativo. Confere ausência de rolagem horizontal e erros de JavaScript e
-não persistência do número do cartão no armazenamento do navegador. Capturas e
+ausência de campos de cartão na oferta atual por Pix. Capturas e
 banco fictício ficam no diretório temporário indicado no JSON final. A emulação
 não substitui aparelhos físicos, Safari/iOS ou homologação real autorizada do
 provedor. O teste exige a porta 5058 livre.

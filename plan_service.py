@@ -14,7 +14,42 @@ from fastflow_gateway import AMOUNT_CENTS, money_matches, transaction_id, Gatewa
 
 PLAN_RULES_VERSION = "ME-GUARDE-MAIS-2026-11-v1"
 PLAN_RULES = "Plano ME GUARDE Mais: R$ 33,90 por ciclo mensal, 10 créditos, pequeno 1 crédito e grande 2 créditos. Créditos não acumulam. Excedentes e atraso são cobrados à parte. Sem débito automático. Renovação antecipada inicia após o ciclo vigente; após vencimento, um novo ciclo inicia com a confirmação do pagamento. A cobertura de pacotes recebidos é preservada."
+CREDITS_PER_CYCLE = 10
+SMALL_CREDIT_COST = 1
+LARGE_CREDIT_COST = 2
+
 OPEN_STATES = ("creating", "uncertain", "pending", "approved", "under_review")
+
+
+def public_offer():
+    from core import (
+        SMALL_PACKAGE_PRICE,
+        LARGE_PACKAGE_PRICE,
+        SMALL_PACKAGE_MAX_SUM,
+        LARGE_PACKAGE_MAX_SUM,
+        SMALL_PACKAGE_MAX_WEIGHT,
+        LARGE_PACKAGE_MAX_WEIGHT,
+    )
+
+    small_count = CREDITS_PER_CYCLE // SMALL_CREDIT_COST
+    large_count = CREDITS_PER_CYCLE // LARGE_CREDIT_COST
+    avulso_cents = max(
+        round(SMALL_PACKAGE_PRICE * 100) * small_count,
+        round(LARGE_PACKAGE_PRICE * 100) * large_count,
+    )
+    return dict(
+        monthly_price=AMOUNT_CENTS / 100,
+        small_price=SMALL_PACKAGE_PRICE,
+        large_price=LARGE_PACKAGE_PRICE,
+        small_count=small_count,
+        large_count=large_count,
+        large_equivalent=LARGE_CREDIT_COST // SMALL_CREDIT_COST,
+        saving_percent=max(0, (avulso_cents - AMOUNT_CENTS) * 100 // avulso_cents),
+        small_sum=SMALL_PACKAGE_MAX_SUM,
+        large_sum=LARGE_PACKAGE_MAX_SUM,
+        small_weight=SMALL_PACKAGE_MAX_WEIGHT,
+        large_weight=LARGE_PACKAGE_MAX_WEIGHT,
+    )
 
 
 def iso(value):
@@ -452,7 +487,7 @@ def consume(db, client_id, package_id, package_ref, category, original_price, va
     lock_account(db, client_id, value)
     grant_due(db, client_id, value)
     current, _, _ = cycles(db, client_id, value)
-    cost = 1 if category == "Pequeno" else 2
+    cost = SMALL_CREDIT_COST if category == "Pequeno" else LARGE_CREDIT_COST
     if (
         not current
         or current["suspended"]

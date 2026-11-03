@@ -100,11 +100,12 @@ def install_google_login(app, db, login_blocked, record_login):
         return redirect(url_for('client_login'))
 
     def complete(client):
+        destination=session.get("client_login_destination")
         session.clear()
         session['client_id'] = client['id']
         session['client_session_version'] = client['session_version']
         session['client_auth_method'] = 'google'
-        return redirect(url_for('client_area'))
+        return redirect(url_for('plans.client_hub' if destination=='plan' else 'client_area'))
 
     @app.context_processor
     def google_context():

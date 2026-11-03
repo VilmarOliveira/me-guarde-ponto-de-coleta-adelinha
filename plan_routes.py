@@ -204,6 +204,24 @@ def install(
             plan_rules=service.PLAN_RULES,
         )
 
+    @bp.get("/plano/assinar")
+    def subscribe_entry():
+        if session.get("staff"):
+            flash("A contratação do plano é feita pela conta do cliente.", "info")
+            return redirect(url_for("dashboard"))
+        if session.get("client_id"):
+            person = owner()
+            if (
+                person
+                and person["active"]
+                and person["session_version"] == session.get("client_session_version")
+            ):
+                return redirect(url_for("plans.client_hub"))
+            session.pop("client_id", None)
+            session.pop("client_session_version", None)
+        session["client_login_destination"] = "plan"
+        return redirect(url_for("client_login"))
+
     @bp.get("/cliente/plano")
     @client_required
     def client_hub():
@@ -376,6 +394,12 @@ def install(
             return "", 401
         try:
             payload = json.loads(raw)
+            if not isinstance(payload, dict):
+                return "", 400
+            # The provider panel sends a signed connectivity check, not a TX.
+            # Do not access the database or API for this exact boolean flag.
+            if payload.get("test") is True:
+                return "", 200
             data = payload.get("data", payload)
             tid = str(data.get("transaction_id", data.get("id", "")))
             if not re.fullmatch("[1-9][0-9]{0,29}", tid):
@@ -576,6 +600,11 @@ def install(
         return {
             "plan_feature_visible": settings().active or bool(has_history),
             "plan_labels": LABELS,
+            "public_plan_offer": service.public_offer(),
+            "public_plan_logo": bool(
+                app.config.get("ME_GUARDE_MAIS_LOGO_PATH")
+                and Path(app.config["ME_GUARDE_MAIS_LOGO_PATH"]).is_file()
+            ),
             "plan_package_coverage": lambda pid: service.coverage(db(), pid),
         }
 

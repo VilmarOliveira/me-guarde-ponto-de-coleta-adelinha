@@ -384,7 +384,7 @@ def test_reminders_final_day_and_uncertain_not_retried(site):
     )
 
 
-def test_card_declined_no_sensitive_persistence_and_disabled_gate(site, caplog):
+def test_card_declined_no_sensitive_persistence_and_disabled_gate(site, caplog,monkeypatch):
     app, client, db, fake = site
     fields = {
         "method": "card",
@@ -394,6 +394,7 @@ def test_card_declined_no_sensitive_persistence_and_disabled_gate(site, caplog):
         "card_holder": "Fixture Customer",
     }
     assert post_purchase(client, **fields).status_code == 302 and fake.creates == 0
+    monkeypatch.setattr("fastflow_gateway.CARD_CHECKOUT_AVAILABLE",True)  # Legacy adapter coverage only.
     app.config.update(FASTFLOW_CARD_ENABLED="1", FASTFLOW_CARD_PCI_READY="1")
     fake.failure = GatewayError("Cartão recusado.", code="declined")
     response = post_purchase(client, **fields)
@@ -814,6 +815,7 @@ def test_postgresql_atomic_activation_and_concurrent_last_credit():
 
 def test_card_summary_requires_detail_get_before_grant(site, monkeypatch):
     app, client, db, fake = site
+    monkeypatch.setattr("fastflow_gateway.CARD_CHECKOUT_AVAILABLE",True)  # Legacy adapter coverage only.
     app.config.update(FASTFLOW_CARD_ENABLED="1", FASTFLOW_CARD_PCI_READY="1")
     fake.state = "paid"
     original = fake.create

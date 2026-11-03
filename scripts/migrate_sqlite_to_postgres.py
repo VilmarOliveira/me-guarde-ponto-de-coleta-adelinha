@@ -16,6 +16,7 @@ TABLES = (
     "login_attempts", "audit_logs", "settings", "blog_posts", "blog_icon_assets", "blog_icons", "verification_codes",
     "reminder_logs", "site_banners", "site_photos", "site_themes", "staff_users",
     "staff_recovery_codes", "id_sequences", "analytics_events",
+    "plan_api_budget", "plan_accounts", "plan_orders", "plan_cycles", "plan_credit_ledger", "plan_payment_events", "plan_reminders",
 )
 
 
@@ -45,7 +46,7 @@ def migrate(source_path, database_url):
                 )
         for table in ("clients", "packages", "pickups", "password_tokens", "login_attempts", "audit_logs",
                       "blog_posts", "verification_codes", "reminder_logs", "site_banners", "site_photos",
-                      "site_themes", "staff_users", "staff_recovery_codes"):
+                      "site_themes", "staff_users", "staff_recovery_codes", "plan_credit_ledger", "plan_payment_events"):
             target.execute(
                 "SELECT setval(pg_get_serial_sequence(?, 'id'), COALESCE(MAX(id), 1), MAX(id) IS NOT NULL) FROM " + table,
                 (table,),

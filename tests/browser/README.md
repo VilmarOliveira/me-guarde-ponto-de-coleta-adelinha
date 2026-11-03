@@ -147,3 +147,24 @@ NODE_PATH=/tmp/adelinha-browser/node_modules node tests/browser/blog_covers.cjs
 ```
 
 O servidor é isolado, com banco e imagens fictícios. Verifica as sete larguras, PNG/JPG/WebP, imagem completa horizontal/vertical, prévia, descrição acessível, substituição, rejeição com preservação da capa anterior, remoção e artigo sem capa, mantendo conteúdo e SEO. Relatório em `/tmp/adelinha-blog-cover-results`.
+
+## Plano ME GUARDE Mais / FastFlow
+
+Teste independente com banco temporário, servidor somente em `127.0.0.1:5058`,
+credenciais fictícias e API FastFlow substituída **apenas na fixture**. Não usa o
+banco de produção, não envia e-mails nem faz cobranças reais. Instale a biblioteca
+de desenvolvimento fora do checkout:
+
+```bash
+.venv/bin/python -m pip install --target /tmp/adelinha-browser-py playwright
+PYTHONPATH=/tmp/adelinha-browser-py .venv/bin/python tests/browser/plan_fastflow.py
+```
+
+Usa `/usr/bin/chromium`, verifica o plano em 320, 360, 390, 430, 768, 1024 e
+1440 px; formulário do cartão, QR Code Pix, botão de cópia por toque em contexto
+móvel, ativação, renovação antecipada sem liberação de créditos futuros e painel
+administrativo. Confere ausência de rolagem horizontal e erros de JavaScript e
+não persistência do número do cartão no armazenamento do navegador. Capturas e
+banco fictício ficam no diretório temporário indicado no JSON final. A emulação
+não substitui aparelhos físicos, Safari/iOS ou homologação real autorizada do
+provedor. O teste exige a porta 5058 livre.

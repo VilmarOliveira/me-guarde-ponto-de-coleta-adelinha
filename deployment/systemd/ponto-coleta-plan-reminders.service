@@ -1,0 +1,14 @@
+[Unit]
+Description=Lembretes Gmail do Plano ME GUARDE Mais
+After=network-online.target ponto-coleta.service
+Wants=network-online.target
+[Service]
+Type=oneshot
+TimeoutStartSec=0
+User=ponto-coleta
+Group=ponto-coleta
+WorkingDirectory=/opt/ponto-coleta
+EnvironmentFile=/etc/ponto-coleta/site.env
+ExecStart=/opt/ponto-coleta/.venv/bin/python scripts/plan_tasks.py reminders
+UMask=0077
+NoNewPrivileges=true

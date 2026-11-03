@@ -21,6 +21,8 @@ from fastflow_gateway import FastFlow, Settings, GatewayError
 from client_compliance import compliance
 import client_actions
 import plan_service as service
+import plan_administration as administration
+import uuid
 from database import DatabaseIntegrityError, DatabaseConnection
 from core import TZ
 
@@ -36,6 +38,8 @@ LABELS = {
     "declined": "Cartão recusado",
     "failed": "Não foi possível criar a cobrança",
     "refunded": "Estornado / em tratamento",
+    "manual_approved": "Participação validada manualmente",
+    "admin_cancelled": "Solicitação cancelada pelo administrador",
 }
 
 
@@ -55,6 +59,8 @@ def refresh(db, app, order_id, value, *, force=False):
     if not row:
         return False
     order = dict(row)
+    if order["method"] == "administrative":
+        return False
     if (
         force
         and order["checked_at"]
@@ -84,7 +90,7 @@ def refresh(db, app, order_id, value, *, force=False):
         )
         if data is None:
             db.execute(
-                "UPDATE plan_orders SET state='uncertain',checked_at=?,error_code='awaiting_correlation' WHERE id=? AND transaction_id IS NULL AND state!='paid'",
+                "UPDATE plan_orders SET state='uncertain',checked_at=?,error_code='awaiting_correlation' WHERE id=? AND transaction_id IS NULL AND state IN ('creating','uncertain','pending','approved','under_review')",
                 (service.iso(value), order_id),
             )
             db.commit()
@@ -487,13 +493,36 @@ def install(
     @admin_required
     def admin_hub():
         admin()
-        orders = (
+        try:
+            orders_page = max(1, int(request.args.get("orders_page", "1")))
+        except ValueError:
+            abort(400)
+        search = request.args.get("q", "").strip()[:100]
+        matching_orders = "%" + search.lower() + "%"
+        only_unpaid = request.args.get("only_unpaid") == "1"
+        order_filter = (
+            " AND o.state IN ('creating','uncertain','pending','approved','under_review','expired','cancelled','failed','declined') AND o.paid_at IS NULL AND NOT EXISTS(SELECT 1 FROM plan_cycles pc WHERE pc.order_id=o.id)"
+            if only_unpaid
+            else ""
+        )
+        order_rows = (
             db()
             .execute(
-                "SELECT o.*,c.name,c.public_id FROM plan_orders o JOIN clients c ON c.id=o.client_id ORDER BY o.created_at DESC LIMIT 100"
+                "SELECT o.*,c.name,c.public_id FROM plan_orders o JOIN clients c ON c.id=o.client_id WHERE (LOWER(c.name) LIKE ? OR LOWER(COALESCE(c.public_id,'')) LIKE ? OR LOWER(COALESCE(c.email,'')) LIKE ? OR LOWER(o.id) LIKE ? OR COALESCE(o.transaction_id,'') LIKE ?)"
+                + order_filter
+                + " ORDER BY o.created_at DESC LIMIT 101 OFFSET ?",
+                (
+                    matching_orders,
+                    matching_orders,
+                    matching_orders,
+                    matching_orders,
+                    matching_orders,
+                    (orders_page - 1) * 100,
+                ),
             )
             .fetchall()
         )
+        orders = order_rows[:100]
         cycles = (
             db()
             .execute(
@@ -511,8 +540,37 @@ def install(
             .execute("SELECT * FROM plan_reminders ORDER BY claimed_at DESC LIMIT 50")
             .fetchall()
         )
+        try:
+            page = max(1, int(request.args.get("page", "1")))
+        except ValueError:
+            abort(400)
+        query = request.args.get("q", "").strip()[:100]
+        matching = "%" + query.lower() + "%"
+        clients = (
+            db()
+            .execute(
+                "SELECT id,name,public_id,email,active FROM clients WHERE LOWER(name) LIKE ? OR LOWER(COALESCE(public_id,'')) LIKE ? OR LOWER(COALESCE(email,'')) LIKE ? ORDER BY id DESC LIMIT 51 OFFSET ?",
+                (matching, matching, matching, (page - 1) * 50),
+            )
+            .fetchall()
+        )
+        decisions = (
+            db()
+            .execute(
+                "SELECT d.*,c.public_id FROM plan_admin_decisions d JOIN clients c ON c.id=d.client_id ORDER BY d.created_at DESC LIMIT 100"
+            )
+            .fetchall()
+        )
         return render_template(
             "plan_admin.html",
+            orders_page=orders_page,
+            orders_next=len(order_rows) > 100,
+            only_unpaid=only_unpaid,
+            clients=clients[:50],
+            page=page,
+            has_next=len(clients) > 50,
+            query=query,
+            decisions=decisions,
             orders=orders,
             cycles=cycles,
             events=events,
@@ -527,6 +585,120 @@ def install(
             card_configured=settings().card_enabled and settings().card_pci_ready,
             logo=bool(app.config.get("ME_GUARDE_MAIS_LOGO_PATH")),
         )
+
+    def actor():
+        staff = current_staff()
+        return {
+            "id": staff["id"] if staff else None,
+            "key": "staff:" + str(staff["id"]) if staff else "legacy",
+            "name": (
+                staff["name"]
+                if staff
+                else app.config.get("STAFF_NAME", "Administrador")
+            ),
+        }
+
+    def decision_screen(person, order, action):
+        current, future, _ = service.cycles(db(), person["id"], now())
+        missing = eligible(db(), person, now()) if action == "approve" else []
+        operation_id = (
+            request.form.get("operation_id", "")
+            if request.method == "POST"
+            else str(uuid.uuid4())
+        )
+        error = None
+        if request.method == "POST":
+            try:
+                if request.form.get("confirm") != "yes":
+                    raise ValueError("Confirme a ação antes de continuar.")
+                if action == "approve":
+                    if not person["active"]:
+                        raise ValueError(
+                            "Cliente inativo. Regularize a conta antes de validar a participação."
+                        )
+                    if missing:
+                        raise ValueError("Regularize antes: " + "; ".join(missing))
+                    administration.approve(
+                        db(),
+                        person["id"],
+                        order["id"] if order else None,
+                        actor(),
+                        request.form.get("reason", ""),
+                        operation_id,
+                        now(),
+                        settings(),
+                        expected_key=request.form.get("cycle_key"),
+                    )
+                    flash(
+                        "Participação no plano validada manualmente. O histórico foi preservado.",
+                        "success",
+                    )
+                else:
+                    administration.cancel(
+                        db(),
+                        app,
+                        order["id"],
+                        actor(),
+                        request.form.get("reason", ""),
+                        operation_id,
+                        now(),
+                        settings(),
+                    )
+                    flash(
+                        "Solicitação não paga cancelada. O histórico foi preservado.",
+                        "success",
+                    )
+                return redirect(url_for("plans.admin_hub"))
+            except (ValueError, GatewayError) as failure:
+                db().rollback()
+                error = str(failure)
+            except DatabaseIntegrityError:
+                db().rollback()
+                error = "O pedido mudou durante a operação. Atualize a página para conferir o estado atual."
+        return render_template(
+            "plan_admin_decision.html",
+            person=person,
+            order=order,
+            action=action,
+            current=current,
+            future=future,
+            missing=missing,
+            error=error,
+            operation_id=operation_id,
+            cycle_key=service.next_cycle_key(db(), person["id"], now()),
+            reason=request.form.get("reason", ""),
+            labels=LABELS,
+        ), (400 if error else 200)
+
+    @bp.route(
+        "/painel/configuracoes/plano/clientes/<int:client_id>/validar",
+        methods=["GET", "POST"],
+    )
+    @admin_required
+    def admin_client_approve(client_id):
+        admin()
+        person = (
+            db().execute("SELECT * FROM clients WHERE id=?", (client_id,)).fetchone()
+        )
+        if not person:
+            abort(404)
+        return decision_screen(person, None, "approve")
+
+    @bp.route(
+        "/painel/configuracoes/plano/pedidos/<oid>/<action>", methods=["GET", "POST"]
+    )
+    @admin_required
+    def admin_decide(oid, action):
+        admin()
+        if action not in ("approve", "cancel"):
+            abort(404)
+        order = get_order(oid)
+        person = (
+            db()
+            .execute("SELECT * FROM clients WHERE id=?", (order["client_id"],))
+            .fetchone()
+        )
+        return decision_screen(person, order, action)
 
     @bp.post("/painel/configuracoes/plano/verificar-provedor")
     @admin_required
@@ -549,7 +721,10 @@ def install(
     @admin_required
     def admin_check(oid):
         admin()
-        get_order(oid)
+        order=get_order(oid)
+        if order['method']=='administrative':
+            flash('Esta participação foi validada manualmente e não possui cobrança FastFlow para consulta.','info')
+            return redirect(url_for('plans.admin_hub'))
         checked = refresh(db(), app, oid, now(), force=True)
         flash(
             (

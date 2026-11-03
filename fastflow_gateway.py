@@ -220,6 +220,10 @@ class FastFlow:
             )
         return data
 
+    def cancel(self, identifier):
+        # This endpoint cancels an unpaid charge; it never marks a TX paid.
+        return self.request("DELETE", "/transactions/" + transaction_id(identifier))
+
     def find(self, order):
         # The order-specific documented callback is the correlation identifier
         # for PIX. A missing match does NOT authorize another create request.

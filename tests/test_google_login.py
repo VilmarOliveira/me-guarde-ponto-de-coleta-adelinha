@@ -221,3 +221,22 @@ def test_invalid_state_does_not_destroy_legitimate_pending_authorization(site):
     assert 'Não foi possível validar' in result.text and site[3]['exchange_count']==0
     result=site[1].get('/cliente/google/retorno',query_string={'state':token,'code':'fake-authorization-code'},follow_redirects=True)
     assert 'Confirmar vínculo' in result.text and site[3]['exchange_count']==1
+
+
+def test_google_session_uses_same_plan_eligibility_and_never_staff_permissions(site):
+    from database import DatabaseConnection
+    import plan_routes
+    from datetime import datetime
+    from core import TZ
+    app,client,path,state=site
+    assert 'Confirmar vínculo' in callback(site).text
+    assert client.post('/cliente/google/confirmar',data={'password':'senha-segura','csrf_token':csrf(client)}).status_code==302
+    assert client.get('/cliente/plano').status_code==200
+    db=DatabaseConnection(path)
+    owner=db.execute('SELECT * FROM clients WHERE id=1').fetchone()
+    assert not plan_routes.eligible(db,owner,datetime.now(TZ))
+    db.execute("UPDATE clients SET residential_street='' WHERE id=1");db.commit()
+    owner=db.execute('SELECT * FROM clients WHERE id=1').fetchone()
+    assert 'Rua residencial' in plan_routes.eligible(db,owner,datetime.now(TZ))
+    assert client.get('/painel/configuracoes/plano').status_code==302
+    db.close()

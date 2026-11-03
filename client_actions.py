@@ -14,7 +14,7 @@ from email_challenges import issue as issue_email, verify as verify_email
 
 KINDS={'notice':'Aviso informativo','mandatory':'Regularização obrigatória','optional':'Autorização opcional'}
 ACTIONS={'read':'Confirmar leitura','profile':'Atualizar dados','terms':'Aceitar termos','signature':'Assinar','email':'Confirmar por código de e-mail'}
-FUNCTIONS={'delivery':'Dados para novas entregas','new_packages':'Registrar novas encomendas'}
+FUNCTIONS={'delivery':'Dados para novas entregas','new_packages':'Registrar novas encomendas','plans':'Contratar ou renovar o plano'}
 CRITERIA={'profile':'Dados do cadastro incompletos','signature':'Assinatura ausente ou inválida','email_confirmation':'Confirmação contratual por e-mail pendente','contract_version':'Versão do contrato ainda não aceita'}
 
 

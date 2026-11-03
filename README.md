@@ -306,3 +306,7 @@ A Área do Cliente mostra pendências reais e permite completar dados e confirma
 ## Política de Privacidade e documentos públicos
 
 A rota pública `/privacidade` e os links do rodapé organizam o acesso à política e aos Termos de Serviço existentes em `/condicoes`. A política está identificada como **minuta para revisão antes da publicação definitiva**, com pendências operacionais e fontes oficiais cuja consulta foi bloqueada no ambiente. Consulte [revisão, evidências e URLs para o Google Cloud](docs/privacidade-revisao.md). Documentos abrem em nova aba para preservar os dados do cadastro e a assinatura; não acrescentam consentimento para publicidade.
+
+## Plano ME GUARDE Mais e FastFlow
+
+Base persistente de ciclos mensais, 10 créditos por R$ 33,90, consumo no recebimento, Pix e integração Card In com ativação controlada. Webhooks assinados, consulta independente à API, proteção contra duplicidade, histórico e lembretes Gmail. Não há débito automático. Veja [configuração completa na Oracle, PCI e homologação](docs/plano-fastflow-oracle.md). A integração fica desativada até configurar as variáveis e o webhook do provedor.

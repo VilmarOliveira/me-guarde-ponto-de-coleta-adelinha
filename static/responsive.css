@@ -290,3 +290,9 @@ form .blog-option { display:flex; align-items:flex-start; gap:10px; line-height:
 .blog-cover-editor .blog-cover-preview { display:block; width:100%; object-fit:contain; }
 form .blog-cover-option { display:flex; align-items:flex-start; gap:10px; min-height:44px; line-height:1.5; }
 .blog-cover-option input[type=checkbox] { display:inline-block; flex:none; width:22px; height:22px; margin:0; }
+
+/* ME GUARDE Mais: shared responsive payment and credit presentation. */
+.plan-panel{overflow-wrap:anywhere}.plan-logo{display:block;width:240px;max-width:100%;height:auto;object-fit:contain;margin-bottom:1rem}
+.plan-balance strong{font-size:2rem}.plan-checkout{max-width:36rem;display:grid;gap:1rem}.plan-checkout fieldset{min-width:0;padding:1rem;border:1px solid var(--border,#ccc);border-radius:12px}.plan-checkout fieldset[hidden]{display:none}
+.plan-checkout label:not(.plan-consent){display:grid;gap:.4rem}.plan-checkout input,.plan-checkout select,.plan-pix textarea{max-width:100%;width:100%;min-width:0;font-size:16px;box-sizing:border-box}
+.plan-consent{display:flex;align-items:flex-start;gap:.7rem;line-height:1.5}.plan-consent input{width:24px;height:24px;flex:0 0 24px;accent-color:#13834b}.plan-pix{max-width:36rem}.plan-pix img{display:block;max-width:100%;height:auto;margin:1rem auto}.plan-pix textarea{overflow-wrap:anywhere;word-break:break-all}.plan-panel form{margin-bottom:1rem}

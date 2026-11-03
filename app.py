@@ -1,3 +1,5 @@
+import plan_service
+import plan_routes
 import os
 import secrets
 import hashlib
@@ -157,6 +159,13 @@ def create_app(test_config=None):
         GOOGLE_LOGIN_CLIENT_ID=os.environ.get('GOOGLE_LOGIN_CLIENT_ID', ''),
         GOOGLE_LOGIN_CLIENT_SECRET=os.environ.get('GOOGLE_LOGIN_CLIENT_SECRET', ''),
         GOOGLE_LOGIN_REDIRECT_URI=os.environ.get('GOOGLE_LOGIN_REDIRECT_URI', ''),
+        FASTFLOW_ENABLED=os.environ.get('FASTFLOW_ENABLED','0'),
+        FASTFLOW_API_KEY=os.environ.get('FASTFLOW_API_KEY',''),
+        FASTFLOW_WEBHOOK_SECRET=os.environ.get('FASTFLOW_WEBHOOK_SECRET',''),
+        FASTFLOW_PUBLIC_ORIGIN=os.environ.get('FASTFLOW_PUBLIC_ORIGIN',''),
+        FASTFLOW_CARD_ENABLED=os.environ.get('FASTFLOW_CARD_ENABLED','0'),
+        FASTFLOW_CARD_PCI_READY=os.environ.get('FASTFLOW_CARD_PCI_READY','0'),
+        ME_GUARDE_MAIS_LOGO_PATH=os.environ.get('ME_GUARDE_MAIS_LOGO_PATH',''),
         CURRENT_DOCUMENT_BRAND=BRAND_VERSION,
         CURRENT_DOCUMENT_LOGO=int(ORIGINAL_LOGO.is_file()),
         PASSWORD_LINK_MINUTES=30,
@@ -249,6 +258,8 @@ def create_app(test_config=None):
 
     @app.before_request
     def csrf_protection():
+        if request.endpoint == "plans.webhook":
+            return None  # Raw-body HMAC replaces browser CSRF only on this callback.
         if "csrf_token" not in session:
             session["csrf_token"] = secrets.token_urlsafe(32)
         if request.method == "POST" and not secrets.compare_digest(request.form.get("csrf_token", ""), session["csrf_token"]):
@@ -1401,7 +1412,7 @@ def create_app(test_config=None):
         linked = db().execute("SELECT COUNT(*) AS total FROM packages WHERE client_id=?", (client_id,)).fetchone()["total"]
         if pending:
             flash("Não é possível excluir ou desativar enquanto houver pacotes pendentes.", "error")
-        elif linked or client["signature"] or client["terms_version"] or db().execute("SELECT 1 FROM client_contract_records WHERE client_id=?", (client_id,)).fetchone() or db().execute("SELECT 1 FROM client_action_assignments WHERE client_id=?", (client_id,)).fetchone():
+        elif db().execute("SELECT 1 FROM plan_accounts WHERE client_id=?", (client_id,)).fetchone() or linked or client["signature"] or client["terms_version"] or db().execute("SELECT 1 FROM client_contract_records WHERE client_id=?", (client_id,)).fetchone() or db().execute("SELECT 1 FROM client_action_assignments WHERE client_id=?", (client_id,)).fetchone():
             db().execute("UPDATE clients SET active=0,session_version=session_version+1 WHERE id=?", (client_id,))
             audit("desativar", "cliente", client_id, "histórico preservado")
             db().commit()
@@ -1607,6 +1618,9 @@ def create_app(test_config=None):
             flash('Novas encomendas dependem de regularização: '+ '; '.join(requirements)+'. A retirada de pacotes já recebidos permanece disponível.','error')
             return redirect(url_for('dashboard')+'#novo-pacote')
         width, height, length, weight = numbers
+        db().commit()
+        db().begin_write()
+        plan_service.lock_account(db(), selected_client["id"], now())
         try:
             cur = db().execute("""INSERT INTO packages(client_id, tracking, width, height, length, weight, shelf, category, base_price, status, created_at)
                 VALUES(?,?,?,?,?,?,?,?,?,'aguardando_aviso',?) RETURNING id""", (selected_client["id"], data["tracking"].strip(), width, height, length, weight, data["shelf"].strip(), category, price, now().isoformat()))
@@ -1619,9 +1633,10 @@ def create_app(test_config=None):
         new_package_id = cur.fetchone()["id"]
         package_id = f"PCTPCA-{new_package_id}"
         db().execute("UPDATE packages SET public_id=? WHERE id=?", (package_id, new_package_id))
+        covered = plan_service.consume(db(), selected_client["id"], new_package_id, package_id, category, price, now())
         audit("criar", "pacote", new_package_id, package_id)
         db().commit()
-        flash(f"{package_id} registrado como {category}.", "success")
+        flash(f"{package_id} registrado como {category}." + (" Coberto pelo plano; crédito registrado no recebimento." if covered else " Cobrança avulsa."), "success")
         return redirect(url_for("dashboard"))
 
     @app.route("/painel/pacotes/<int:package_id>/editar", methods=["GET", "POST"])
@@ -1644,6 +1659,12 @@ def create_app(test_config=None):
                 message = "Pacote recusado: Limite de 150 cm na soma e 20 kg." if "Limite de 150" in str(error) else str(error)
                 flash(message, "error")
                 return redirect(url_for("edit_package", package_id=package_id))
+            coverage = plan_service.coverage(db(), package_id)
+            if coverage:
+                if selected_client['id'] != package['client_id'] or category != package['category']:
+                    flash('Pacote coberto pelo plano: não é permitido alterar cliente ou categoria, preservando o histórico de créditos.', 'error')
+                    return redirect(url_for('edit_package', package_id=package_id))
+                price = 0
             width, height, length, weight = numbers
             updated = db().execute("""UPDATE packages SET client_id=?,tracking=?,width=?,height=?,length=?,weight=?,shelf=?,category=?,base_price=? WHERE id=? AND status='aguardando_aviso' AND NOT EXISTS(SELECT 1 FROM pickup_packages WHERE package_id=?)""",
                 (selected_client["id"], data["tracking"].strip(), width, height, length, weight, data["shelf"].strip(), category, price, package_id, package_id))
@@ -1663,10 +1684,10 @@ def create_app(test_config=None):
         package = db().execute(f"""SELECT {PACKAGE_COLUMNS_P},c.name client_name FROM packages p JOIN clients c ON c.id=p.client_id WHERE p.id=?""", (package_id,)).fetchone()
         if not package:
             abort(404)
-        allowed = package["status"] == "aguardando_aviso" and not db().execute("SELECT 1 FROM pickup_packages WHERE package_id=?", (package_id,)).fetchone()
+        allowed = not plan_service.coverage(db(), package_id) and package["status"] == "aguardando_aviso" and not db().execute("SELECT 1 FROM pickup_packages WHERE package_id=?", (package_id,)).fetchone()
         if request.method == "POST":
             if not allowed:
-                flash("O pacote não pode ser excluído após a confirmação do aviso.", "error")
+                flash("Pacotes com crédito do plano, aviso ou retirada não podem ser excluídos; o histórico deve ser preservado.", "error")
                 return redirect(url_for("package_detail", package_id=package_id))
             if request.form.get("confirmation") != package["public_id"]:
                 flash("Confirmação inválida. Digite o ID do pacote.", "error")
@@ -1866,6 +1887,7 @@ def create_app(test_config=None):
     install_google_login(app, db, login_blocked, record_login)
     install_regularization(app, db, client_login_required, now, lambda *args: send_code(*args), residential_address_form, valid_residential_address, current_contract)
     client_actions.install(app, db, client_login_required, admin_required, current_staff, now, lambda *args: send_code(*args), lambda: (TERMS_VERSION,CONTRACT_LABEL,terms_text()))
+    plan_routes.install(app, db, client_login_required, admin_required, current_staff, now, qr_code_data_url, validated_image_type)
     @app.context_processor
     def action_context():
         if not session.get('client_id'):return {}
@@ -2001,6 +2023,7 @@ def init_db(database):
         client_id BIGINT PRIMARY KEY REFERENCES clients(id) ON DELETE CASCADE, scope_hash TEXT NOT NULL,
         code_hash TEXT NOT NULL,expires_at BIGINT NOT NULL,attempts INTEGER NOT NULL,sent_at BIGINT NOT NULL,sends INTEGER NOT NULL,window_start BIGINT NOT NULL)""")
     client_actions.schema(connection,id_type)
+    plan_service.schema(connection,id_type)
     ensure_columns(connection, "pickups", {"payment_method": "TEXT", "document_type": "TEXT", "payment_confirmed_at": "TEXT", "payment_confirmed_by": "TEXT",
         "discount_type": "TEXT", "discount_input": "REAL", "discount_amount": "REAL", "original_total": "REAL",
         "final_total": "REAL", "discount_applied_by": "TEXT", "surcharge_amount": "REAL", "surcharge_reason": "TEXT",

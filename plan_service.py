@@ -1,0 +1,488 @@
+"""Append-only financial evidence and monthly credit entitlements.
+
+Network work is performed outside write locks. All activation and credit changes
+are serialized per client and committed atomically. Existing package fees are
+never recomputed from the customer's current plan.
+"""
+
+import re
+import calendar
+import uuid
+from datetime import datetime, timedelta
+from core import TZ
+from fastflow_gateway import AMOUNT_CENTS, money_matches, transaction_id, GatewayError
+
+PLAN_RULES_VERSION = "ME-GUARDE-MAIS-2026-11-v1"
+PLAN_RULES = "Plano ME GUARDE Mais: R$ 33,90 por ciclo mensal, 10 créditos, pequeno 1 crédito e grande 2 créditos. Créditos não acumulam. Excedentes e atraso são cobrados à parte. Sem débito automático. Renovação antecipada inicia após o ciclo vigente; após vencimento, um novo ciclo inicia com a confirmação do pagamento. A cobertura de pacotes recebidos é preservada."
+OPEN_STATES = ("creating", "uncertain", "pending", "approved", "under_review")
+
+
+def iso(value):
+    return value.astimezone(TZ).isoformat()
+
+
+def parse(value):
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    return parsed.replace(tzinfo=TZ) if parsed.tzinfo is None else parsed.astimezone(TZ)
+
+
+def month_after(start, anchor=None):
+    year, month = (
+        (start.year + 1, 1) if start.month == 12 else (start.year, start.month + 1)
+    )
+    return start.replace(
+        year=year,
+        month=month,
+        day=min(anchor or start.day, calendar.monthrange(year, month)[1]),
+    )
+
+
+def schema(db, id_type):
+    db.execute(
+        "CREATE TABLE IF NOT EXISTS plan_api_budget (minute TEXT NOT NULL,endpoint TEXT NOT NULL,calls INTEGER NOT NULL,PRIMARY KEY(minute,endpoint))"
+    )
+    db.execute("CREATE TABLE IF NOT EXISTS plan_gateway_lock (id INTEGER PRIMARY KEY)")
+    db.execute("INSERT INTO plan_gateway_lock(id) VALUES(1) ON CONFLICT DO NOTHING")
+    db.execute(
+        """CREATE TABLE IF NOT EXISTS plan_accounts(client_id BIGINT PRIMARY KEY REFERENCES clients(id),created_at TEXT NOT NULL)"""
+    )
+    db.execute(
+        """CREATE TABLE IF NOT EXISTS plan_orders (
+        id TEXT PRIMARY KEY,client_id BIGINT NOT NULL REFERENCES clients(id),method TEXT NOT NULL,
+        amount_cents INTEGER NOT NULL,cycle_key TEXT NOT NULL,renewal_of TEXT,
+        state TEXT NOT NULL,transaction_id TEXT UNIQUE,created_at TEXT NOT NULL,checked_at TEXT,
+        check_after TEXT,paid_at TEXT,refunded_at TEXT,error_code TEXT,
+        payer_document TEXT NOT NULL,callback_url TEXT NOT NULL,
+        qr_text TEXT,expires_at TEXT,settlement_state TEXT,card_brand TEXT,card_last4 TEXT,
+        rules_version TEXT NOT NULL,rules_text TEXT NOT NULL,accepted_at TEXT NOT NULL)"""
+    )
+    db.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_plan_one_open_order ON plan_orders(client_id,cycle_key) WHERE state IN ('creating','uncertain','pending','approved','under_review','paid')"
+    )
+    db.execute("""CREATE TABLE IF NOT EXISTS plan_cycles (
+        id TEXT PRIMARY KEY,order_id TEXT NOT NULL UNIQUE REFERENCES plan_orders(id),
+        client_id BIGINT NOT NULL REFERENCES clients(id),starts_at TEXT NOT NULL,ends_at TEXT NOT NULL,
+        anchor_day INTEGER NOT NULL,granted_at TEXT,used_credits INTEGER NOT NULL DEFAULT 0,
+        suspended INTEGER NOT NULL DEFAULT 0,review_required INTEGER NOT NULL DEFAULT 0,
+        CHECK(used_credits>=0 AND used_credits<=10))""")
+    db.execute(f"""CREATE TABLE IF NOT EXISTS plan_credit_ledger (
+        id {id_type},cycle_id TEXT NOT NULL REFERENCES plan_cycles(id),kind TEXT NOT NULL,
+        amount INTEGER NOT NULL,package_id BIGINT UNIQUE REFERENCES packages(id),package_ref TEXT,
+        recorded_at TEXT NOT NULL,original_base_cents INTEGER,
+        UNIQUE(cycle_id,kind,package_id))""")
+    db.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_plan_one_grant ON plan_credit_ledger(cycle_id) WHERE kind='grant'"
+    )
+    db.execute(f"""CREATE TABLE IF NOT EXISTS plan_payment_events (
+        id {id_type},order_id TEXT REFERENCES plan_orders(id),transaction_id TEXT,
+        event_key TEXT NOT NULL UNIQUE,event_type TEXT NOT NULL,received_at TEXT NOT NULL,
+        processed_at TEXT,outcome TEXT NOT NULL,reason TEXT)""")
+    db.execute("""CREATE TABLE IF NOT EXISTS plan_reminders (
+        cycle_id TEXT NOT NULL REFERENCES plan_cycles(id),day TEXT NOT NULL,state TEXT NOT NULL,
+        claimed_at TEXT NOT NULL,sent_at TEXT,PRIMARY KEY(cycle_id,day))""")
+    db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_plan_pending ON plan_orders(state,check_after)"
+    )
+    db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_plan_cycles_owner ON plan_cycles(client_id,starts_at,ends_at)"
+    )
+
+
+def claim_api_slot(db, method, path, value):
+    """Shared cross-worker budget below the documented provider rate limits."""
+    endpoint = (
+        method + " " + ("/transactions" if path.startswith("/transactions") else path)
+    )
+    minute = iso(value.replace(second=0, microsecond=0))
+    maximum = 4 if method == "POST" else 15
+    db.begin_write()
+    row = db.execute(
+        """INSERT INTO plan_api_budget(minute,endpoint,calls) VALUES(?,?,1)
+        ON CONFLICT(minute,endpoint) DO UPDATE SET calls=plan_api_budget.calls+1
+        WHERE plan_api_budget.calls<? RETURNING calls""",
+        (minute, endpoint, maximum),
+    ).fetchone()
+    db.execute(
+        "DELETE FROM plan_api_budget WHERE minute<?", (iso(value - timedelta(hours=2)),)
+    )
+    db.commit()
+    if not row:
+        raise GatewayError(
+            "Limite de consultas atingido. Aguarde antes de consultar novamente.",
+            code="rate_limited",
+        )
+
+
+def lock_account(db, client_id, value):
+    db.execute(
+        "INSERT INTO plan_accounts(client_id,created_at) VALUES(?,?) ON CONFLICT DO NOTHING",
+        (client_id, iso(value)),
+    )
+    db.execute(
+        "SELECT client_id FROM plan_accounts WHERE client_id=?"
+        + (" FOR UPDATE" if db.postgres else ""),
+        (client_id,),
+    ).fetchone()
+
+
+def cycles(db, client_id, value):
+    rows = [
+        dict(r)
+        for r in db.execute(
+            "SELECT * FROM plan_cycles WHERE client_id=? ORDER BY starts_at DESC",
+            (client_id,),
+        ).fetchall()
+    ]
+    active = [r for r in rows if parse(r["starts_at"]) <= value < parse(r["ends_at"])]
+    upcoming = [r for r in reversed(rows) if parse(r["starts_at"]) > value]
+    current = next(
+        (r for r in active if not r["suspended"]), active[0] if active else None
+    )
+    future = next(
+        (r for r in upcoming if not r["suspended"]), upcoming[0] if upcoming else None
+    )
+    return current, future, rows
+
+
+def grant_due(db, client_id, value):
+    # Caller holds the account lock and write transaction.
+    for row in db.execute(
+        "SELECT * FROM plan_cycles WHERE client_id=? AND granted_at IS NULL AND suspended=0",
+        (client_id,),
+    ).fetchall():
+        if parse(row["starts_at"]) <= value < parse(row["ends_at"]):
+            db.execute(
+                "UPDATE plan_cycles SET granted_at=? WHERE id=? AND granted_at IS NULL",
+                (iso(value), row["id"]),
+            )
+            db.execute(
+                "INSERT INTO plan_credit_ledger(cycle_id,kind,amount,recorded_at) VALUES(?,'grant',10,?) ON CONFLICT DO NOTHING",
+                (row["id"], iso(value)),
+            )
+
+
+def reserve_order(db, owner, method, value, settings):
+    db.commit()
+    db.begin_write()
+    lock_account(db, owner["id"], value)
+    current, future, _ = cycles(db, owner["id"], value)
+    if future and not future["suspended"]:
+        db.commit()
+        return None, "O próximo ciclo já está pago. Nenhuma nova cobrança foi criada."
+    if current and current["suspended"]:
+        db.commit()
+        return (
+            None,
+            "Há um pagamento em revisão administrativa. Seus pacotes recebidos continuam disponíveis para retirada.",
+        )
+    key = "after:" + current["id"] if current else "activation"
+    # Expired first attempts may leave a paid activation order: a fresh period
+    # must use a key anchored to the most recently expired cycle.
+    if not current:
+        previous = db.execute(
+            "SELECT id FROM plan_cycles WHERE client_id=? ORDER BY ends_at DESC LIMIT 1",
+            (owner["id"],),
+        ).fetchone()
+        if previous:
+            key = "restart:" + previous["id"]
+    old = db.execute(
+        "SELECT * FROM plan_orders WHERE client_id=? AND cycle_key=? AND state IN ('creating','uncertain','pending','approved','under_review','paid') ORDER BY created_at DESC LIMIT 1",
+        (owner["id"], key),
+    ).fetchone()
+    if old:
+        db.commit()
+        return dict(old), None
+    db.execute(
+        "SELECT id FROM plan_gateway_lock WHERE id=1"
+        + (" FOR UPDATE" if db.postgres else "")
+    ).fetchone()
+    # Four creation attempts/minute is the provider's documented global cap.
+    recent = db.execute(
+        "SELECT COUNT(*) n FROM plan_orders WHERE created_at>?",
+        (iso(value - timedelta(minutes=1)),),
+    ).fetchone()["n"]
+    if recent >= 4:
+        db.commit()
+        return None, "Aguarde um minuto antes de criar outra cobrança."
+    oid = str(uuid.uuid4())
+    stamp = iso(value)
+    db.execute(
+        """INSERT INTO plan_orders(id,client_id,method,amount_cents,cycle_key,renewal_of,state,created_at,payer_document,callback_url,rules_version,rules_text,accepted_at)
+        VALUES(?,?,?,?,?,?,'creating',?,?,?,?,?,?)""",
+        (
+            oid,
+            owner["id"],
+            method,
+            AMOUNT_CENTS,
+            key,
+            current["id"] if current else None,
+            stamp,
+            re.sub(r"\D", "", owner["cpf"]),
+            settings.callback(oid),
+            PLAN_RULES_VERSION,
+            PLAN_RULES,
+            stamp,
+        ),
+    )
+    db.commit()
+    return (
+        dict(db.execute("SELECT * FROM plan_orders WHERE id=?", (oid,)).fetchone()),
+        "create",
+    )
+
+
+def validate_transaction(order, data):
+    if not isinstance(data, dict):
+        raise GatewayError(code="invalid_response")
+    tid = transaction_id(data.get("id", data.get("transaction_id")))
+    if order.get("transaction_id") and tid != order["transaction_id"]:
+        raise GatewayError(
+            "A transação não corresponde ao pedido.", code="identity_mismatch"
+        )
+    if data.get("payment_provider") != "fastflow" or not money_matches(
+        data.get("amount")
+    ):
+        raise GatewayError(
+            "Provedor ou valor divergente. O plano não foi liberado.",
+            code="amount_provider_mismatch",
+        )
+    if data.get("notification_url") != order["callback_url"]:
+        raise GatewayError(
+            "Vínculo da transação com o pedido não confirmado.",
+            code="identity_mismatch",
+        )
+    user = data.get("user") or {}
+    if not isinstance(user, dict):
+        raise GatewayError(code="invalid_response")
+    document = str(user.get("cpf_cnpj", data.get("payer_document", "")))
+    if (
+        document
+        and "".join(c for c in document if c.isdigit()) != order["payer_document"]
+    ):
+        raise GatewayError(
+            "A transação pertence a outro cadastro.", code="identity_mismatch"
+        )
+    method = data.get("payment_method", "pix")
+    if method != order["method"]:
+        raise GatewayError("Forma de pagamento divergente.", code="identity_mismatch")
+    return tid
+
+
+def attach_creation_id(db, order_id, data, value):
+    """Keep the API POST identifier, without granting credits from its summary."""
+    if not isinstance(data, dict):
+        raise GatewayError(code="invalid_response")
+    tid = transaction_id(data.get("id"))
+    if data.get("payment_provider") != "fastflow" or not money_matches(
+        data.get("amount")
+    ):
+        raise GatewayError(code="amount_provider_mismatch")
+    db.commit()
+    db.begin_write()
+    order = db.execute("SELECT * FROM plan_orders WHERE id=?", (order_id,)).fetchone()
+    lock_account(db, order["client_id"], value)
+    order = db.execute("SELECT * FROM plan_orders WHERE id=?", (order_id,)).fetchone()
+    if (order["transaction_id"] and order["transaction_id"] != tid) or data.get(
+        "payment_method", "pix"
+    ) != order["method"]:
+        db.rollback()
+        raise GatewayError(code="identity_mismatch")
+    if db.execute(
+        "SELECT 1 FROM plan_orders WHERE transaction_id=? AND id!=?", (tid, order_id)
+    ).fetchone():
+        db.rollback()
+        raise GatewayError(code="identity_mismatch")
+    db.execute("UPDATE plan_orders SET transaction_id=? WHERE id=?", (tid, order_id))
+    db.commit()
+    return tid
+
+
+def safe_time(value):
+    try:
+        return iso(parse(value)) if value else None
+    except (TypeError, ValueError, AttributeError):
+        return None
+
+
+def apply_transaction(db, order_id, data, value):
+    original = db.execute(
+        "SELECT * FROM plan_orders WHERE id=?", (order_id,)
+    ).fetchone()
+    if not original:
+        raise GatewayError(code="unknown_order")
+    tid = validate_transaction(dict(original), data)
+    state = data.get("status")
+    if state not in (
+        "pending",
+        "approved",
+        "under_review",
+        "paid",
+        "expired",
+        "cancelled",
+        "refunded",
+    ):
+        raise GatewayError(
+            "Situação do pagamento em análise. Consulte a administração.",
+            code="unknown_status",
+        )
+    db.commit()
+    db.begin_write()
+    lock_account(db, original["client_id"], value)
+    order = dict(
+        db.execute(
+            "SELECT * FROM plan_orders WHERE id=?"
+            + (" FOR UPDATE" if db.postgres else ""),
+            (order_id,),
+        ).fetchone()
+    )
+    validate_transaction(order, data)
+    other = db.execute(
+        "SELECT id FROM plan_orders WHERE transaction_id=? AND id!=?", (tid, order_id)
+    ).fetchone()
+    if other:
+        db.rollback()
+        raise GatewayError(
+            "Transação já vinculada a outro pedido.", code="identity_mismatch"
+        )
+    qr = data.get("qr_code_text")
+    expires = safe_time(data.get("qr_code_expires_at"))
+    card = data.get("card") or {}
+    if not isinstance(card, dict):
+        raise GatewayError(code="invalid_response")
+    brand = card.get("brand")
+    last4 = card.get("last4")
+    if not isinstance(brand, str) or not re_safe_brand(brand):
+        brand = None
+    if not isinstance(last4, str) or len(last4) != 4 or not last4.isdigit():
+        last4 = None
+    settlement = (
+        data.get("receivable_status")
+        if data.get("receivable_status")
+        in ("scheduled", "settled", "paid", "cancelled", "refunded")
+        else None
+    )
+    db.execute(
+        """UPDATE plan_orders SET transaction_id=?,checked_at=?,check_after=?,qr_text=COALESCE(?,qr_text),expires_at=COALESCE(?,expires_at),settlement_state=?,card_brand=?,card_last4=?,error_code=NULL WHERE id=?""",
+        (
+            tid,
+            iso(value),
+            iso(value + timedelta(seconds=20)),
+            qr if isinstance(qr, str) and len(qr) <= 4096 else None,
+            expires,
+            settlement,
+            brand,
+            last4,
+            order_id,
+        ),
+    )
+    cycle = db.execute(
+        "SELECT * FROM plan_cycles WHERE order_id=?", (order_id,)
+    ).fetchone()
+    if state == "refunded":
+        db.execute(
+            "UPDATE plan_orders SET state='refunded',refunded_at=COALESCE(refunded_at,?) WHERE id=?",
+            (iso(value), order_id),
+        )
+        if cycle:
+            db.execute(
+                "UPDATE plan_cycles SET suspended=1,review_required=? WHERE id=?",
+                (int(cycle["used_credits"] > 0), cycle["id"]),
+            )
+    elif order["refunded_at"]:
+        # A stale paid event cannot resurrect refunded credits.
+        if cycle:
+            db.execute(
+                "UPDATE plan_cycles SET review_required=1 WHERE id=?", (cycle["id"],)
+            )
+    elif cycle:
+        if state == "paid":
+            db.execute("UPDATE plan_orders SET state='paid' WHERE id=?", (order_id,))
+        elif state not in ("pending", "approved"):
+            db.execute(
+                "UPDATE plan_cycles SET suspended=1,review_required=1 WHERE id=?",
+                (cycle["id"],),
+            )
+    elif state == "paid":
+        duplicate = db.execute(
+            "SELECT id FROM plan_orders WHERE client_id=? AND cycle_key=? AND state='paid' AND id!=?",
+            (order["client_id"], order["cycle_key"], order_id),
+        ).fetchone()
+        if duplicate:
+            db.rollback()
+            raise GatewayError(
+                "Mais de um pagamento para a mesma contratação; consulte o atendimento.",
+                code="duplicate_remote",
+            )
+        current, future, _ = cycles(db, order["client_id"], value)
+        if (future and not future["suspended"]) or (current and current["suspended"]):
+            db.rollback()
+            raise GatewayError(
+                "Há mais de um pagamento para o próximo ciclo. Tratamento administrativo necessário.",
+                code="duplicate_remote",
+            )
+        # Confirmed late payment never backdates a cycle over received parcels.
+        start = (
+            parse(current["ends_at"]) if current and not current["suspended"] else value
+        )
+        anchor = current["anchor_day"] if current else value.day
+        end = month_after(start, anchor)
+        cid = str(uuid.uuid4())
+        db.execute(
+            "INSERT INTO plan_cycles(id,order_id,client_id,starts_at,ends_at,anchor_day) VALUES(?,?,?,?,?,?)",
+            (cid, order_id, order["client_id"], iso(start), iso(end), anchor),
+        )
+        db.execute(
+            "UPDATE plan_orders SET state='paid',paid_at=? WHERE id=?",
+            (iso(value), order_id),
+        )
+        grant_due(db, order["client_id"], value)
+    else:
+        db.execute("UPDATE plan_orders SET state=? WHERE id=?", (state, order_id))
+    db.commit()
+
+
+def re_safe_brand(value):
+    import re
+
+    return bool(re.fullmatch("[A-Za-z0-9 -]{1,32}", value))
+
+
+def consume(db, client_id, package_id, package_ref, category, original_price, value):
+    """Called after package INSERT within its transaction, before commit."""
+    lock_account(db, client_id, value)
+    grant_due(db, client_id, value)
+    current, _, _ = cycles(db, client_id, value)
+    cost = 1 if category == "Pequeno" else 2
+    if (
+        not current
+        or current["suspended"]
+        or not current["granted_at"]
+        or 10 - current["used_credits"] < cost
+    ):
+        return False
+    result = db.execute(
+        "UPDATE plan_cycles SET used_credits=used_credits+? WHERE id=? AND suspended=0 AND used_credits+?<=10",
+        (cost, current["id"], cost),
+    )
+    if result.rowcount != 1:
+        return False
+    db.execute(
+        "INSERT INTO plan_credit_ledger(cycle_id,kind,amount,package_id,package_ref,recorded_at,original_base_cents) VALUES(?,'consume',?,?,?,?,?)",
+        (
+            current["id"],
+            -cost,
+            package_id,
+            package_ref,
+            iso(value),
+            int(round(original_price * 100)),
+        ),
+    )
+    db.execute("UPDATE packages SET base_price=0 WHERE id=?", (package_id,))
+    return True
+
+
+def coverage(db, package_id):
+    return db.execute(
+        "SELECT * FROM plan_credit_ledger WHERE package_id=? AND kind='consume'",
+        (package_id,),
+    ).fetchone()

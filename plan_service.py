@@ -591,3 +591,13 @@ def coverage(db, package_id):
         "SELECT * FROM plan_credit_ledger WHERE package_id=? AND kind='consume'",
         (package_id,),
     ).fetchone()
+
+
+def coverage_description(db, package):
+    entry = coverage(db, package["id"])
+    if entry:
+        cost = -entry["amount"]
+        return f"Incluído no plano · {cost} crédito{'s' if cost != 1 else ''} já utilizado{'s' if cost != 1 else ''} · Recebimento: R$ 0,00."
+    base = package["base_price"] if "base_price" in package.keys() else package["base"]
+    amount = f"{base:.2f}".replace(".", ",")
+    return f"Avulso · Recebimento: R$ {amount}."

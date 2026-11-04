@@ -190,3 +190,5 @@ PYTHONPATH=/tmp/adelinha-browser-py .venv/bin/python tests/browser/customer_paym
 ```
 
 Usa Chromium em `/usr/bin/chromium`, servidor temporário em `127.0.0.1:5077`, dados fictícios e FastFlow simulada. Verifica as seis abas nas sete larguras, menu móvel, saldo, PDF, Pix AI/Fast/Dinheiro, pagamento separado da entrega, assinatura no redimensionamento, renovação manual e ativação por API. Relatório e capturas ficam na pasta temporária informada ao final. Sem cobranças ou e-mails reais.
+
+O cenário `customer_payments.py` também verifica a prévia de cobertura (1/2 créditos, sem débito), sua identificação na retirada e a habilitação do Pix Fast em R$ 3,99, R$ 4,00, R$ 1.000,00 e R$ 1.000,01.

@@ -435,7 +435,7 @@ def test_cancel_documented_put_and_http_metadata(monkeypatch):
     assert "secret" not in str(result.value)
 
 
-@pytest.mark.parametrize("base", [3.99, 5000.01])
+@pytest.mark.parametrize("base", [3.99, 1000.01])
 def test_fast_limits_offer_manual_without_changing_value(payments, base):
     _, client, db, fake = payments
     pid = package(db, base=base)
@@ -681,3 +681,162 @@ def test_pickup_cancel_validates_binding_before_remote_mutation(payments, monkey
         ]
         == "aguardando_retirada"
     )
+
+
+@pytest.mark.parametrize(
+    "total, adjustments, allowed",
+    [
+        (3.99, {"discount_amount": "0.91"}, False),
+        (4.00, {"discount_amount": "0.90"}, True),
+        (
+            1000.00,
+            {"surcharge_amount": "995.10", "surcharge_reason": "Ajuste ficticio"},
+            True,
+        ),
+        (
+            1000.01,
+            {"surcharge_amount": "995.11", "surcharge_reason": "Ajuste ficticio"},
+            False,
+        ),
+    ],
+)
+def test_pickup_fast_final_amount_boundaries(payments, total, adjustments, allowed):
+    _, client, db, fake = payments
+    pid = package(db)
+    staff(client)
+    summary = client.post(
+        "/painel/retirada/resumo",
+        data={"package_ids": pid, "csrf_token": token(client), **adjustments},
+    )
+    assert summary.json["total"] == total
+    assert summary.json["fast_available"] is allowed
+    assert summary.json["fast_range_message"] == pp.FAST_RANGE_MESSAGE
+    response = create_pickup(client, [pid], **adjustments)
+    assert response.status_code == (200 if allowed else 400)
+    assert fake.creates == int(allowed)
+    if allowed:
+        row = db.execute("SELECT * FROM pickup_payment_orders").fetchone()
+        assert row["amount_cents"] == round(total * 100)
+        assert fake.records[row["transaction_id"]]["amount"] == total
+    else:
+        assert response.json["error"] == pp.FAST_RANGE_MESSAGE
+        assert not db.execute("SELECT 1 FROM pickup_payment_orders").fetchone()
+
+
+def preview(client, **overrides):
+    return client.post(
+        "/painel/pacotes/cobertura",
+        data={
+            "client_id": 1,
+            "width": "10",
+            "height": "10",
+            "length": "10",
+            "weight": "1",
+            "csrf_token": token(client),
+            **overrides,
+        },
+    )
+
+
+def test_preview_readonly_uses_category_and_balance(payments):
+    _, client, db, fake = payments
+    fake.state = "paid"
+    post_purchase(client)
+    db.execute("UPDATE plan_cycles SET used_credits=4")
+    db.commit()
+    staff(client)
+    before = db.execute("SELECT COUNT(*) n FROM plan_credit_ledger").fetchone()["n"]
+    small = preview(client).json
+    assert (
+        small["message"]
+        == "Plano ativo · 6 créditos disponíveis · Este pacote usará 1 crédito."
+    )
+    large = preview(client, width="40", height="40", length="40", weight="12").json
+    assert large["category"] == "Grande" and large["credits"] == 2
+    assert (
+        db.execute("SELECT used_credits FROM plan_cycles").fetchone()["used_credits"]
+        == 4
+    )
+    assert (
+        db.execute("SELECT COUNT(*) n FROM plan_credit_ledger").fetchone()["n"]
+        == before
+    )
+    db.execute("UPDATE plan_cycles SET used_credits=9")
+    db.commit()
+    insufficient = preview(
+        client, width="40", height="40", length="40", weight="12"
+    ).json
+    assert (
+        insufficient["message"] == "Recebimento avulso · R$ 9,90."
+        and not insufficient["covered"]
+    )
+    assert preview(client, width="NaN").status_code == 400
+    assert preview(client, client_id=999).status_code == 400
+
+
+def test_receipt_coverage_persists_after_expiry_and_not_retroactive(payments):
+    _, client, db, fake = payments
+    old = package(db)
+    staff(client)
+    assert preview(client).json["message"] == "Recebimento avulso · R$ 4,90."
+    with client.session_transaction() as session:
+        session.clear()
+        session.update(client_id=1, client_session_version=1)
+    fake.state = "paid"
+    post_purchase(client)
+    staff(client)
+    response = client.post(
+        "/pacotes",
+        data={
+            "client_id": 1,
+            "tracking": "COVERNEW",
+            "shelf": "A2",
+            "width": 10,
+            "height": 10,
+            "length": 10,
+            "weight": 1,
+            "csrf_token": token(client),
+        },
+    )
+    assert response.status_code == 302
+    covered = db.execute("SELECT * FROM packages WHERE tracking='COVERNEW'").fetchone()
+    assert covered["base_price"] == 0 and ps.coverage(db, covered["id"])["amount"] == -1
+    assert ps.coverage(db, old) is None
+    before = db.execute(
+        "SELECT COUNT(*) n FROM plan_credit_ledger WHERE kind='consume'"
+    ).fetchone()["n"]
+    db.execute(
+        "UPDATE plan_cycles SET ends_at=?",
+        (ps.iso(datetime.now(TZ) - timedelta(days=1)),),
+    )
+    db.execute(
+        "UPDATE packages SET status='aguardando_retirada',notified_at=?",
+        (ps.iso(datetime.now(TZ) - timedelta(days=5)),),
+    )
+    db.commit()
+    assert not preview(client).json["covered"]
+    summary = client.post(
+        "/painel/retirada/resumo",
+        data={"package_ids": [old, covered["id"]], "csrf_token": token(client)},
+    ).json
+    messages = {p["id"]: p for p in summary["package_coverage"]}
+    assert (
+        messages[covered["id"]]["message"]
+        == "Incluído no plano · 1 crédito já utilizado · Recebimento: R$ 0,00."
+    )
+    assert messages[old]["message"] == "Avulso · Recebimento: R$ 4,90."
+    assert messages[old]["late"] > 0 and messages[covered["id"]]["late"] > 0
+    assert "Incluído no plano" in client.get("/painel").text
+    assert deliver(client, [old, covered["id"]], "Dinheiro").status_code == 302
+    assert (
+        db.execute(
+            "SELECT COUNT(*) n FROM plan_credit_ledger WHERE kind='consume'"
+        ).fetchone()["n"]
+        == before
+    )
+    assert ps.coverage(db, covered["id"]) is not None and ps.coverage(db, old) is None
+
+
+def test_coverage_preview_requires_staff(payments):
+    _, client, _, _ = payments
+    assert preview(client).status_code == 302

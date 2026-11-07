@@ -1,4 +1,4 @@
-{% extends 'base.html' %}{% from 'image_upload.html' import image_upload with context %}{% from 'icons.html' import icon %}{% block title %}Banners · Configurações{% endblock %}{% block content %}
+{% extends 'base.html' %}{% from 'image_upload.html' import image_upload with context %}{% from 'icons.html' import icon %}{% block title %}Banners · Configurações{% endblock %}{% block content %}{% with settings_section='identity' %}{% include 'settings_section_tabs.html' %}{% endwith %}
 <section class="panel-card"><h1>{{ icon('banner') }} Banners</h1><p>Gerencie o banner principal Me Guarde e os outros dois banners do topo da página. Ao mudar a ordem, as imagens trocam de posição.</p>
 {% if banners|length > 3 %}<p class="notice">Todos os banners anteriores foram preservados. Mantenha até três ativos; desative um deles antes de ativar uma imagem excedente.</p>{% endif %}
 <div class="banner-admin-grid">

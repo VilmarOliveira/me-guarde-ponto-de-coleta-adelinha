@@ -1,4 +1,4 @@
-{% extends 'base.html' %}{% from 'icons.html' import icon %}{% block title %}Pix · Configurações{% endblock %}{% block content %}
+{% extends 'base.html' %}{% from 'icons.html' import icon %}{% block title %}Pix · Configurações{% endblock %}{% block content %}{% with settings_section='payments' %}{% include 'settings_section_tabs.html' %}{% endwith %}
 <section class="panel-card"><h1>Configuração do Pix</h1>
 {% if editing %}<h2>Editar dados do Pix</h2><form method="post" action="{{ url_for('pix_settings') }}">
 <label>Nome do titular<input name="receiver" value="{{ setting.pix_receiver_name }}" required maxlength="180"></label>

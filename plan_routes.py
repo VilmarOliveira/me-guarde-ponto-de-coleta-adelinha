@@ -1,4 +1,4 @@
-"""Client/admin plan screens and signed FastFlow callbacks; no PAN persistence."""
+"""Client/admin plan screens and signed Fast callbacks; no PAN persistence."""
 
 import hashlib
 import hmac
@@ -22,6 +22,7 @@ from client_compliance import compliance
 import client_actions
 import plan_service as service
 import plan_pricing as pricing
+import billing_archive
 import payment_policies as policies
 import plan_administration as administration
 import uuid
@@ -200,7 +201,8 @@ def install(
         )
         code = (
             order["qr_text"]
-            if (order["method"] == "pix" or order["local_method"] == "Pix AI")
+            if not order["archived_at"]
+            and (order["method"] == "pix" or order["local_method"] == "Pix AI")
             and order["state"] in ("pending", "approved", "under_review")
             else None
         )
@@ -317,8 +319,8 @@ def install(
         pending = (
             db()
             .execute(
-                "SELECT * FROM plan_orders WHERE client_id=? AND cycle_key=? AND state IN ('creating','uncertain','pending','approved','under_review','cancel_requested') ORDER BY created_at DESC LIMIT 1",
-                (person["id"], cycle_key),
+                "SELECT * FROM plan_orders WHERE client_id=? AND (state IN ('creating','uncertain','pending','approved','under_review','cancel_requested') OR error_code IN ('archived_payment_review','payment_after_cancellation')) ORDER BY created_at DESC LIMIT 1",
+                (person["id"],),
             )
             .fetchone()
         )
@@ -584,6 +586,10 @@ def install(
             if only_unpaid
             else ""
         )
+        show_archived = request.args.get("arquivadas") == "1"
+        order_filter += " AND o.archived_at IS " + (
+            "NOT NULL" if show_archived else "NULL"
+        )
         order_rows = (
             db()
             .execute(
@@ -642,6 +648,7 @@ def install(
         )
         return render_template(
             "plan_admin.html",
+            show_archived=show_archived,
             orders_page=orders_page,
             orders_next=len(order_rows) > 100,
             only_unpaid=only_unpaid,
@@ -851,6 +858,21 @@ def install(
         )
         return decision_screen(person, order, action)
 
+    @bp.post("/painel/configuracoes/plano/pagamentos/<oid>/arquivar")
+    @admin_required
+    def archive_payment(oid):
+        admin()
+        try:
+            billing_archive.archive(
+                db(), "plan_orders", oid, actor()["key"], service.iso(now())
+            )
+            flash(
+                "Cobrança arquivada. O acompanhamento do pagamento continua.", "success"
+            )
+        except ValueError as exc:
+            flash(str(exc), "error")
+        return redirect(url_for("plans.admin_hub"))
+
     @bp.route("/painel/configuracoes/plano/pagamentos/<oid>", methods=["GET", "POST"])
     @admin_required
     def admin_payment(oid):
@@ -878,7 +900,9 @@ def install(
             labels=LABELS,
             qr=(
                 qr_data(item["qr_text"])
-                if item["qr_text"] and item["state"] in service.OPEN_STATES
+                if item["qr_text"]
+                and not item["archived_at"]
+                and item["state"] in service.OPEN_STATES
                 else None
             ),
         )
@@ -902,13 +926,13 @@ def install(
         admin()
         if not settings().ready:
             flash(
-                "Configure e habilite a integração FastFlow no ambiente do serviço.",
+                "Configure e habilite a integração Fast no ambiente do serviço.",
                 "error",
             )
         else:
             try:
                 gateway(app).provider()
-                flash("Chave validada: provedor FastFlow.", "success")
+                flash("Chave validada: provedor Fast.", "success")
             except GatewayError as error:
                 flash(str(error), "error")
         return redirect(url_for("plans.admin_hub"))
@@ -920,7 +944,7 @@ def install(
         order = get_order(oid)
         if order["method"] == "administrative":
             flash(
-                "Esta participação foi validada manualmente e não possui cobrança FastFlow para consulta.",
+                "Esta participação foi validada manualmente e não possui cobrança Fast para consulta.",
                 "info",
             )
             return redirect(url_for("plans.admin_hub"))
@@ -929,7 +953,7 @@ def install(
             (
                 "Consulta concluída. A liberação depende exclusivamente da confirmação válida na API."
                 if checked
-                else "Aguarde a janela de consulta ou a recuperação da FastFlow; nenhum estado foi aprovado manualmente."
+                else "Aguarde a janela de consulta ou a recuperação da Fast; nenhum estado foi aprovado manualmente."
             ),
             "info",
         )

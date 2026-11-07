@@ -1,4 +1,4 @@
-"""Persistent FastFlow reconciliation and Gmail reminders. Never creates charges."""
+"""Persistent Fast reconciliation and Gmail reminders. Never creates charges."""
 
 from datetime import timedelta
 from html import escape

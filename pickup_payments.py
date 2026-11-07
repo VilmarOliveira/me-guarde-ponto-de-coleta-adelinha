@@ -1,4 +1,4 @@
-"""Pickup-specific FastFlow charges. Payment never confirms physical delivery."""
+"""Pickup-specific Fast charges. Payment never confirms physical delivery."""
 
 import hashlib, json, uuid, re
 from decimal import Decimal, InvalidOperation
@@ -17,6 +17,7 @@ from core import calculate_discount, validate_surcharge
 from fastflow_gateway import Settings, GatewayError, transaction_id
 from database import DatabaseIntegrityError
 import plan_service as ps
+import billing_archive
 import payment_policies as policies
 
 OPEN = (
@@ -107,7 +108,10 @@ def schema(db, id_type, ensure):
         },
     )
     ensure(db, "plan_orders", {"policy_snapshot": "TEXT"})
-    ensure(db,"settings",{"monthly_price_cents":"INTEGER NOT NULL DEFAULT 3390"})
+    ensure(db, "settings", {"monthly_price_cents": "INTEGER NOT NULL DEFAULT 3390"})
+    for table in ("plan_orders", "pickup_payment_orders"):
+        ensure(db, table, {"archived_at": "TEXT", "archived_by": "TEXT"})
+    ensure(db, "pickup_payment_orders", {"cancel_state": "TEXT"})
     ensure(db, "pickup_packages", {"prepaid_amount": "REAL"})
     db.execute("""CREATE TABLE IF NOT EXISTS package_prepayments (
         order_id TEXT NOT NULL REFERENCES pickup_payment_orders(id),
@@ -274,7 +278,7 @@ def apply(db, oid, data, value):
     if other:
         raise GatewayError(code="identity_mismatch")
     db.execute(
-        "UPDATE pickup_payment_orders SET transaction_id=?,checked_at=?,check_after=?,qr_text=COALESCE(?,qr_text),expires_at=COALESCE(?,expires_at),error_code=CASE WHEN error_code='late_payment_review' THEN error_code ELSE NULL END WHERE id=?",
+        "UPDATE pickup_payment_orders SET transaction_id=?,checked_at=?,check_after=?,qr_text=COALESCE(?,qr_text),expires_at=COALESCE(?,expires_at),error_code=CASE WHEN error_code IN ('late_payment_review','archived_payment_review') THEN error_code ELSE NULL END WHERE id=?",
         (
             tid,
             ps.iso(value),
@@ -289,16 +293,26 @@ def apply(db, oid, data, value):
             oid,
         ),
     )
+    if order["archived_at"] and state == "paid" and not order["paid_at"]:
+        db.execute(
+            "UPDATE pickup_payment_orders SET state='paid',paid_at=?,error_code='archived_payment_review' WHERE id=?",
+            (ps.iso(value), oid),
+        )
+        db.commit()
+        return
     if order["delivered_at"]:
         if state in ("refunded", "under_review"):
             db.execute(
                 "UPDATE pickup_payment_orders SET error_code='delivered_payment_review' WHERE id=?",
                 (oid,),
             )
-    elif order["state"] in ("cancel_requested", "cancelled", "expired", "refunded"):
+    elif (
+        order["state"] in ("cancel_requested", "cancelled", "expired", "refunded")
+        or order["cancel_state"] == "external_pending"
+    ):
         if state == "paid":
             db.execute(
-                "UPDATE pickup_payment_orders SET paid_at=COALESCE(paid_at,?),error_code='late_payment_review' WHERE id=?",
+                "UPDATE pickup_payment_orders SET state=CASE WHEN cancel_state='external_pending' THEN 'paid' ELSE state END,paid_at=COALESCE(paid_at,?),error_code='late_payment_review' WHERE id=?",
                 (ps.iso(value), oid),
             )
         elif state in ("cancelled", "expired", "refunded"):
@@ -328,7 +342,12 @@ def apply(db, oid, data, value):
     current = db.execute(
         "SELECT * FROM pickup_payment_orders WHERE id=?", (oid,)
     ).fetchone()
-    if current["advance"] and current["state"] == "paid" and not current["error_code"]:
+    if (
+        current["advance"]
+        and current["state"] == "paid"
+        and not current["error_code"]
+        and not current["archived_at"]
+    ):
         settle_advance(db, current, value)
     db.commit()
 
@@ -500,7 +519,12 @@ def reserve(
                         (order["id"],),
                     )
                     order["advance"] = 1
-                if advance and order["state"] == "paid" and not order["error_code"]:
+                if (
+                    advance
+                    and order["state"] == "paid"
+                    and not order["error_code"]
+                    and not order["archived_at"]
+                ):
                     settle_advance(db, order, value)
                 db.commit()
                 return order, False
@@ -535,7 +559,7 @@ def reserve(
         ).fetchone()["n"]
     )
     if count >= 4:
-        raise ValueError("Aguarde um minuto antes de gerar outra cobrança FastFlow.")
+        raise ValueError("Aguarde um minuto antes de gerar outra cobrança Fast.")
     owner = db.execute(
         "SELECT * FROM clients WHERE id=?", (locked[0]["client_id"],)
     ).fetchone()
@@ -878,6 +902,7 @@ def install(
             qr=(
                 qr_data(item["qr_text"])
                 if item["qr_text"]
+                and not item["archived_at"]
                 and item["state"] in ("pending", "approved", "under_review")
                 else None
             ),
@@ -953,7 +978,11 @@ def install(
                             (old["id"],),
                         )
                         current = order(old["id"])
-                        if current["state"] == "paid" and not current["error_code"]:
+                        if (
+                            current["state"] == "paid"
+                            and not current["error_code"]
+                            and not current["archived_at"]
+                        ):
                             settle_advance(db(), current, now())
                         db().commit()
                         return redirect(
@@ -1050,6 +1079,7 @@ def install(
             qr=(
                 qr_data(item["qr_text"])
                 if item["qr_text"]
+                and not item["archived_at"]
                 and item["state"] in ("pending", "approved", "under_review")
                 else None
             ),
@@ -1076,6 +1106,53 @@ def install(
         order(oid)
         refresh(db(), app, oid, now())
         return redirect(url_for("pickup_payments.payment", oid=oid))
+
+    @bp.get("/painel/retirada/cobrancas")
+    @staff_required
+    def charges():
+        permission()
+        archived = request.args.get("arquivadas") == "1"
+        try:
+            page = max(1, int(request.args.get("page", "1")))
+        except ValueError:
+            abort(400)
+        rows = (
+            db()
+            .execute(
+                "SELECT o.*,c.name,c.public_id FROM pickup_payment_orders o JOIN clients c ON c.id=o.client_id WHERE o.archived_at IS "
+                + ("NOT NULL" if archived else "NULL")
+                + " ORDER BY o.created_at DESC LIMIT 101 OFFSET ?",
+                ((page - 1) * 100,),
+            )
+            .fetchall()
+        )
+        return render_template(
+            "pickup_charges.html",
+            orders=rows[:100],
+            page=page,
+            has_next=len(rows) > 100,
+            archived=archived,
+            labels=LABELS,
+        )
+
+    @bp.post("/painel/retirada/pix-fast/<oid>/arquivar")
+    @staff_required
+    def archive(oid):
+        permission()
+        try:
+            billing_archive.archive(
+                db(),
+                "pickup_payment_orders",
+                oid,
+                str(session.get("staff_user_id") or session.get("staff")),
+                ps.iso(now()),
+            )
+            flash(
+                "Cobrança arquivada. O acompanhamento do pagamento continua.", "success"
+            )
+        except ValueError as exc:
+            flash(str(exc), "error")
+        return redirect(url_for("pickup_payments.charges"))
 
     @bp.post("/painel/retirada/pix-fast/<oid>/cancelar")
     @staff_required
@@ -1108,11 +1185,6 @@ def install(
             )
             db().commit()
             return redirect(url_for("pickup_payments.payment", oid=oid))
-        db().execute(
-            "UPDATE pickup_payment_orders SET state='cancel_requested',check_after=NULL WHERE id=? AND paid_at IS NULL",
-            (oid,),
-        )
-        db().commit()
         import plan_routes
 
         try:
@@ -1128,13 +1200,25 @@ def install(
                     api.cancel(data["id"])
                     data = api.get(data["id"])
                 apply(db(), oid, data, now())
-        except GatewayError:
+        except GatewayError as exc:
             db().rollback()
+            db().execute(
+                "UPDATE pickup_payment_orders SET cancel_state='external_pending',error_code='cancel_awaiting_verification',check_after=NULL WHERE id=?",
+                (oid,),
+            )
+            db().commit()
+            flash(
+                "Não foi possível confirmar o cancelamento. O status da cobrança foi mantido. "
+                + str(exc),
+                "error",
+            )
+            return redirect(url_for("pickup_payments.payment", oid=oid))
+        current = order(oid)
         flash(
             (
-                "Cancelamento aguardando verificação"
-                if order(oid)["state"] == "cancel_requested"
-                else "Situação atualizada. Confira a cobrança."
+                "Cancelada"
+                if current["state"] == "cancelled"
+                else "O cancelamento não foi confirmado. Confira a situação atual antes de tentar novamente."
             ),
             "info",
         )

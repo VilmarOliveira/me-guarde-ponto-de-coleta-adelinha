@@ -185,7 +185,7 @@ def test_new_contract_publication_optional_existing_reaccept_and_append_history(
     rid=draft(center,is_contract='yes',require_existing='yes',document_version='CONTRATO-CENTRAL-2',document_label='Contrato publicado no painel',body='NOVO TEXTO CONTRATUAL, com aceite específico.',functions=['delivery','new_packages'])
     publish(center,rid)
     assert 'NOVO TEXTO CONTRATUAL' in client.get('/condicoes').text
-    assert 'CONTRATO-CENTRAL-2' in app.test_client().get('/').text
+    assert 'CONTRATO-CENTRAL-2' in app.test_client().get('/cadastro').text
     assert client.get('/cliente/dados-de-entrega').status_code==403
     assert client.get('/cliente/contrato-assinado.pdf').status_code==200
     value=token(client,rid);client.post(f'{HUB}/{rid}',data={'choice':'send_code','scope':value,'csrf_token':csrf(client)})

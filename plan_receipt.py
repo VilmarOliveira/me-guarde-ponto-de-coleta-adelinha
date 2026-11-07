@@ -36,7 +36,7 @@ def build(order, person, cycle, method, actor=None):
             "conferência manual pelo ponto"
             if order["manual_paid_at"]
             else (
-                "FastFlow"
+                "Fast"
                 if order["paid_at"]
                 else "histórico administrativo sem confirmação financeira"
             )

@@ -120,7 +120,7 @@ def test_forged_signature_and_google_unavailable(site,monkeypatch):
 def test_no_registration_no_automatic_account_and_message_visible(site):
     site[3]['claims']={'email':'new@example.com'}
     result=callback(site)
-    assert google.NO_ACCOUNT in result.text and result.request.path=='/'
+    assert google.NO_ACCOUNT in result.text and result.request.path=='/cadastro'
     assert 'id="cadastro"' in result.text
     with sqlite3.connect(site[2]) as db:assert db.execute('SELECT count(*) FROM clients').fetchone()[0]==1
 

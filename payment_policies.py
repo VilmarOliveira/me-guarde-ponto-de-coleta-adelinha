@@ -30,7 +30,7 @@ def defaults():
                 else "Gerar Pix Fast" if i == 0 else "Pagar com Pix AI"
             ),
             text=(
-                "Confirmação automática pela FastFlow."
+                "Confirmação automática pela Fast."
                 if i == 0
                 else "Pagamento sujeito à conferência da equipe."
             ),

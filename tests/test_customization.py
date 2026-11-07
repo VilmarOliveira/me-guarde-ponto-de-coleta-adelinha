@@ -109,7 +109,7 @@ def test_contract_confirmation_is_email_only_and_bound_to_email(tmp_path, monkey
     monkeypatch.setattr(app_module, "send_code", lambda channel, destination, code: (sent.append((channel, destination, code)) or (True, "gmail-id")))
     app = create_app({"TESTING": True, "SECRET_KEY": "test", "DATABASE": str(tmp_path / "app.db")})
     client = app.test_client()
-    page = client.get("/").text
+    page = client.get("/cadastro").text
     assert "Enviaremos um código para o e-mail informado no cadastro." in page
     assert "Enviar código por e-mail" in page
     assert 'name="confirmation_channel"' not in page
@@ -148,7 +148,8 @@ def test_manager_access_and_deactivated_session_is_revoked(tmp_path):
     client.post("/painel/configuracoes/usuarios",data={"name":"Gerente Operacional","email":"gerente@example.com","password":"senha-segura","password_confirm":"senha-segura","role":"gerente","can_clients":"yes","can_packages":"yes","can_pickups":"yes","csrf_token":csrf(client)})
     client.post("/sair",data={"csrf_token":csrf(client)}); client.post("/login",data={"user":"gerente@example.com","password":"senha-segura","csrf_token":csrf(client)})
     assert client.get("/painel").status_code==200
-    assert client.get("/painel/configuracoes").status_code==403
+    assert client.get("/painel/configuracoes").status_code==200
+    assert client.get("/painel/configuracoes/pagamentos-cliente").status_code==403
     db=sqlite3.connect(database); db.execute("UPDATE staff_users SET active=0,session_version=session_version+1 WHERE email='gerente@example.com'"); db.commit()
     response=client.get("/painel")
     assert response.status_code==302 and "/login" in response.headers["Location"]

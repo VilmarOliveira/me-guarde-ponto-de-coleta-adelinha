@@ -549,7 +549,7 @@ def test_client_login_logout_and_password_is_hashed(app, client):
     response = client.post("/cliente/login", data={"cpf": "529.982.247-25", "password": "senha-segura", "csrf_token": token(client)}, follow_redirects=True)
     assert "Olá, Cliente Teste" in response.text
     response = client.post("/cliente/sair", data={"csrf_token": token(client)}, follow_redirects=True)
-    assert "Fazer meu cadastro" in response.text
+    assert "FAZER CADASTRO AGORA" in response.text
 
 
 def test_client_cannot_access_another_receipt(app, client):

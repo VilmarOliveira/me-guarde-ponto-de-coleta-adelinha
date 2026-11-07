@@ -200,3 +200,11 @@ PYTHONPATH=/tmp/adelinha-browser-py .venv/bin/python tests/browser/advance_payme
 ```
 
 Fixture isolada em `127.0.0.1:5081`, com API simulada. Verifica seleção de pacotes, prévia, cobertura, geração pelo cliente, QR/Copia e Cola, quitação sem entrega, retirada com saldo zero e PDF. Confere ausência de rolagem horizontal em sete larguras. Veja também `docs/pagamento-antecipado.md`.
+
+## Comparativo, histórico e políticas de pagamento
+
+```bash
+PYTHONPATH=/tmp/adelinha-browser-py .venv/bin/python tests/browser/payment_policies_history.py
+```
+
+Fixture isolada em `127.0.0.1:5083`, sem chamadas financeiras reais. Confere comparativo, duas últimas retiradas, Hoje e todos os filtros, três abas independentes e prévia sem cobrança, em sete larguras. Relatório/capturas ficam na pasta temporária informada.

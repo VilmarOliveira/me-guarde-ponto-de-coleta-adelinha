@@ -2,6 +2,8 @@ import plan_service
 import plan_routes
 import pickup_payments
 import customer_area
+import payment_policies
+import pickup_history as pickup_history_data
 import os
 import secrets
 import hashlib
@@ -282,7 +284,7 @@ def create_app(test_config=None):
             "remove_client": "can_clients", "add_package": "can_packages", "package_coverage_preview": "can_packages",
             "edit_package": "can_packages", "delete_package": "can_packages",
             "notify": "can_packages", "package_detail": "can_packages",
-            "pickup_summary": "can_pickups", "pickup": "can_pickups", "receipt": "can_pickups",
+            "pickup_history_detail": "can_pickups", "pickup_history": "can_pickups", "pickup_summary": "can_pickups", "pickup": "can_pickups", "receipt": "can_pickups",
         }
         required = permissions.get(request.endpoint)
         if required and session.get("staff_user_id"):
@@ -1334,6 +1336,7 @@ def create_app(test_config=None):
         package_rows = db().execute(f"""
             SELECT {PACKAGE_COLUMNS_P}, c.name client_name, c.public_id client_public_id, c.phone
             FROM packages p JOIN clients c ON c.id=p.client_id
+            WHERE p.status!='retirado'
             ORDER BY CASE p.status WHEN 'aguardando_aviso' THEN 0 WHEN 'aguardando_retirada' THEN 1 ELSE 2 END, p.created_at DESC
             LIMIT ? OFFSET ?
         """, (page_size + 1, offset)).fetchall()
@@ -1355,7 +1358,24 @@ def create_app(test_config=None):
             elif day >= 11: alerts["expired"].append(item)
         package_form = session.pop("package_form", {})
         settings = db().execute("SELECT pix_receiver_name,pix_key,pix_key_type FROM settings WHERE id=1").fetchone()
-        return render_template("dashboard.html", clients=clients, packages=rows, alerts=alerts, q=query, pix=settings["pix_key"], pix_key_type=settings["pix_key_type"], package_form=package_form, pix_receiver_name=settings["pix_receiver_name"], page=page, has_next=has_next)
+        return render_template("dashboard.html", clients=clients, packages=rows, recent_pickups=pickup_history_data.rows(db(),{'filtro':'todas'},now().date())[1][:2], alerts=alerts, q=query, pix=settings["pix_key"], pix_key_type=settings["pix_key_type"], package_form=package_form, pix_receiver_name=settings["pix_receiver_name"], page=page, has_next=has_next)
+
+    @app.get('/painel/retiradas/historico')
+    @login_required
+    def pickup_history():
+        try:
+            mode,entries=pickup_history_data.rows(db(),request.args,now().date());error=None
+        except ValueError as exc:
+            mode=request.args.get('filtro','hoje');entries=[];error='Confira as datas e o período informado.'
+        return render_template('pickup_history.html',entries=entries,mode=mode,error=error)
+
+    @app.get('/painel/retiradas/historico/<int:pickup_id>')
+    @login_required
+    def pickup_history_detail(pickup_id):
+        pickup=db().execute(f'SELECT {PICKUP_COLUMNS} FROM pickups WHERE id=?',(pickup_id,)).fetchone()
+        if not pickup:abort(404)
+        packages=db().execute('SELECT p.id package_id,pp.package_public_id public_id,pp.base_amount,pp.late_amount FROM pickup_packages pp JOIN packages p ON p.id=pp.package_id WHERE pp.pickup_id=? ORDER BY pp.package_id',(pickup_id,)).fetchall()
+        return render_template('receipt.html',pickup=pickup,packages=packages,pix=pickup['pix_key_snapshot'] or PIX_KEY,client_copy=False)
 
     @app.get("/painel/clientes/busca")
     @login_required
@@ -1945,6 +1965,7 @@ def create_app(test_config=None):
 
     with app.app_context():
         init_db(app.config["DATABASE"])
+    payment_policies.install(app,db,admin_required,current_staff)
     blog_tools.install(app,db,admin_required,current_staff,now,format_blog_body,validated_image_type)
     install_google_login(app, db, login_blocked, record_login)
     install_regularization(app, db, client_login_required, now, lambda *args: send_code(*args), residential_address_form, valid_residential_address, current_contract)
@@ -2088,6 +2109,7 @@ def init_db(database):
     client_actions.schema(connection,id_type)
     plan_service.schema(connection,id_type)
     pickup_payments.schema(connection,id_type,ensure_columns)
+    payment_policies.schema(connection)
     ensure_columns(connection, "pickups", {"payment_method": "TEXT", "document_type": "TEXT", "payment_confirmed_at": "TEXT", "payment_confirmed_by": "TEXT",
         "discount_type": "TEXT", "discount_input": "REAL", "discount_amount": "REAL", "original_total": "REAL",
         "final_total": "REAL", "discount_applied_by": "TEXT", "surcharge_amount": "REAL", "surcharge_reason": "TEXT",

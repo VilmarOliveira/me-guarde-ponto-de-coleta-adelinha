@@ -17,6 +17,7 @@ from core import calculate_discount, validate_surcharge
 from fastflow_gateway import Settings, GatewayError, transaction_id
 from database import DatabaseIntegrityError
 import plan_service as ps
+import payment_policies as policies
 
 OPEN = (
     "creating",
@@ -96,6 +97,16 @@ def schema(db, id_type, ensure):
         package_id BIGINT PRIMARY KEY REFERENCES packages(id),order_id TEXT NOT NULL REFERENCES pickup_payment_orders(id))"""
     )
     ensure(db, "pickup_payment_orders", {"advance": "INTEGER NOT NULL DEFAULT 0"})
+    ensure(
+        db,
+        "pickup_payment_orders",
+        {
+            "local_method": "TEXT NOT NULL DEFAULT 'Pix Fast'",
+            "policy_snapshot": "TEXT",
+            "manual_confirmed_by": "TEXT",
+        },
+    )
+    ensure(db, "plan_orders", {"policy_snapshot": "TEXT"})
     ensure(db, "pickup_packages", {"prepaid_amount": "REAL"})
     db.execute("""CREATE TABLE IF NOT EXISTS package_prepayments (
         order_id TEXT NOT NULL REFERENCES pickup_payment_orders(id),
@@ -191,6 +202,8 @@ def amount_ok(value, cents):
 
 
 def validate(order, data):
+    if dict(order).get("local_method", "Pix Fast") != "Pix Fast":
+        raise GatewayError(code="wrong_payment_method")
     if not isinstance(data, dict):
         raise GatewayError(code="invalid_response")
     tid = transaction_id(data.get("id", data.get("transaction_id")))
@@ -325,6 +338,8 @@ def refresh(db, app, oid, value):
     ).fetchone()
     if not row:
         return False
+    if row["local_method"] != "Pix Fast":
+        return False
     order = dict(row)
     if order["check_after"] and ps.parse(order["check_after"]) > value:
         return False
@@ -431,7 +446,15 @@ def assert_unreserved(db, ids, allowed=None):
 
 
 def reserve(
-    db, packages, snapshot, actor, value, settings, advance=False, reprice=None
+    db,
+    packages,
+    snapshot,
+    actor,
+    value,
+    settings,
+    advance=False,
+    reprice=None,
+    selector=None,
 ):
     cents = round(snapshot["final_total"] * 100)
     if len({p["client_id"] for p in packages}) != 1:
@@ -486,9 +509,15 @@ def reserve(
     if reprice:
         snapshot = reprice(locked)
         cents = round(snapshot["final_total"] * 100)
-        if not fast_available(snapshot["final_total"]):
-            raise ValueError(FAST_RANGE_MESSAGE)
-    if not fast_available(snapshot["final_total"]):
+    selected = selector(cents) if selector else None
+    if selector:
+        if not selected or selected["method"] == "zero":
+            raise ValueError(
+                "Nada a pagar."
+                if cents == 0
+                else "Nenhuma modalidade disponível. Procure o ponto."
+            )
+    elif not fast_available(snapshot["final_total"]):
         raise ValueError(FAST_RANGE_MESSAGE)
     db.execute(
         "SELECT id FROM plan_gateway_lock WHERE id=1"
@@ -528,6 +557,18 @@ def reserve(
     db.execute(
         "UPDATE pickup_payment_orders SET advance=? WHERE id=?", (int(advance), oid)
     )
+    if selected:
+        method = selected["method"]
+        db.execute(
+            "UPDATE pickup_payment_orders SET local_method=?,policy_snapshot=?,state=?,qr_text=? WHERE id=?",
+            (
+                method,
+                json.dumps(selected, ensure_ascii=False),
+                "creating" if method == "Pix Fast" else "pending",
+                policies.local_code(db, method, cents),
+                oid,
+            ),
+        )
     for pid in ids:
         db.execute(
             "INSERT INTO pickup_payment_packages(order_id,package_id) VALUES(?,?)",
@@ -616,7 +657,7 @@ def reconcile(db, app, value):
         except GatewayError:
             db.rollback()
     for row in db.execute(
-        "SELECT id FROM pickup_payment_orders WHERE (state IN ('creating','uncertain','pending','approved','under_review','cancel_requested') AND (check_after IS NULL OR check_after<=?)) OR (state IN ('paid','expired','cancelled','delivered') AND transaction_id IS NOT NULL AND checked_at<?) ORDER BY COALESCE(checked_at,''),created_at LIMIT 5",
+        "SELECT id FROM pickup_payment_orders WHERE local_method='Pix Fast' AND ((state IN ('creating','uncertain','pending','approved','under_review','cancel_requested') AND (check_after IS NULL OR check_after<=?)) OR (state IN ('paid','expired','cancelled','delivered') AND transaction_id IS NOT NULL AND checked_at<?)) ORDER BY COALESCE(checked_at,''),created_at LIMIT 5",
         (ps.iso(value), ps.iso(value - timedelta(hours=6))),
     ).fetchall():
         refresh(db, app, row["id"], value)
@@ -670,7 +711,7 @@ def install(
             form = {} if client_id is not None else request.form
             snapshot = quote(rows, form, fees)
             cfg = Settings.from_config(app.config)
-            if not cfg.ready:
+            if not cfg.ready and not advance:
                 raise ValueError(
                     "Pix Fast não configurado. Utilize Pix AI ou Dinheiro."
                 )
@@ -712,8 +753,17 @@ def install(
                 cfg,
                 advance=advance,
                 reprice=reprice,
+                selector=(
+                    (
+                        lambda cents: policies.select(
+                            db(), app, "advance", cents, client_id=rows[0]["client_id"]
+                        )
+                    )
+                    if advance
+                    else None
+                ),
             )
-            if new:
+            if new and item["local_method"] == "Pix Fast":
                 import plan_routes
 
                 api = plan_routes.gateway(app)
@@ -801,7 +851,12 @@ def install(
                 if waiting
                 else "Pago antecipadamente · Retirada concluída"
             )
-        return LABELS.get(item["state"], "Em consulta")
+        return (
+            "Verificando cobrança"
+            if item["state"] in ("creating", "uncertain", "cancel_requested")
+            or (item["error_code"] and item["state"] not in ("paid", "delivered"))
+            else LABELS.get(item["state"], "Em consulta")
+        )
 
     def client_order(oid):
         item = order(oid)
@@ -827,6 +882,11 @@ def install(
             ),
             labels=LABELS,
             advance_label=advance_label(item),
+            choice=(
+                json.loads(item["policy_snapshot"])
+                if item["policy_snapshot"]
+                else {"title": item["local_method"], "text": ""}
+            ),
         )
 
     @bp.get("/cliente/pacotes/pagamentos/<oid>/status")
@@ -905,12 +965,71 @@ def install(
             return render_template(
                 "advance_review.html",
                 snapshot=snap,
-                allowed=fast_available(snap["final_total"]),
+                choice=policies.select(
+                    db(),
+                    app,
+                    "advance",
+                    round(snap["final_total"] * 100),
+                    client_id=session["client_id"],
+                ),
+                allowed=snap["final_total"] > 0
+                and policies.select(
+                    db(),
+                    app,
+                    "advance",
+                    round(snap["final_total"] * 100),
+                    client_id=session["client_id"],
+                )
+                is not None,
                 range_message=FAST_RANGE_MESSAGE,
             )
         except ValueError as error:
             flash(str(error), "error")
             return redirect(url_for("client_area", aba="pacotes"))
+
+    @bp.post("/painel/retirada/pix-fast/<oid>/confirmar-manual")
+    @staff_required
+    def confirm_manual(oid):
+        permission()
+        item = order(oid)
+        if item["local_method"] not in ("Pix AI", "Dinheiro"):
+            abort(403)
+        if request.form.get("payment_confirmed") != "yes":
+            abort(400)
+        db().commit()
+        db().begin_write()
+        db().execute(
+            "SELECT id FROM packages WHERE id IN (SELECT package_id FROM pickup_payment_packages WHERE order_id=?) ORDER BY id"
+            + (" FOR UPDATE" if db().postgres else ""),
+            (oid,),
+        ).fetchall()
+        item = (
+            db()
+            .execute(
+                "SELECT * FROM pickup_payment_orders WHERE id=?"
+                + (" FOR UPDATE" if db().postgres else ""),
+                (oid,),
+            )
+            .fetchone()
+        )
+        if item["state"] == "paid":
+            db().commit()
+            return redirect(url_for("pickup_payments.payment", oid=oid))
+        if item["state"] != "pending":
+            db().rollback()
+            abort(409)
+        db().execute(
+            "UPDATE pickup_payment_orders SET state='paid',paid_at=?,manual_confirmed_by=? WHERE id=?",
+            (
+                ps.iso(now()),
+                str(session.get("staff_user_id") or session.get("staff")),
+                oid,
+            ),
+        )
+        settle_advance(db(), order(oid), now())
+        db().commit()
+        flash("Pagamento conferido pela equipe. Saldo quitado.", "success")
+        return redirect(url_for("pickup_payments.payment", oid=oid))
 
     @bp.get("/painel/retirada/pix-fast/<oid>")
     @staff_required
@@ -964,6 +1083,29 @@ def install(
         item = order(oid)
         if item["state"] == "paid" or item["paid_at"]:
             flash("Pagamento confirmado: solicite análise ao administrador.", "error")
+            return redirect(url_for("pickup_payments.payment", oid=oid))
+        if item["local_method"] != "Pix Fast":
+            db().commit()
+            db().begin_write()
+            locked = (
+                db()
+                .execute(
+                    "SELECT * FROM pickup_payment_orders WHERE id=?"
+                    + (" FOR UPDATE" if db().postgres else ""),
+                    (oid,),
+                )
+                .fetchone()
+            )
+            if locked["paid_at"]:
+                db().rollback()
+                abort(409)
+            db().execute(
+                "UPDATE pickup_payment_orders SET state='cancelled' WHERE id=?", (oid,)
+            )
+            db().execute(
+                "DELETE FROM pickup_payment_reservations WHERE order_id=?", (oid,)
+            )
+            db().commit()
             return redirect(url_for("pickup_payments.payment", oid=oid))
         db().execute(
             "UPDATE pickup_payment_orders SET state='cancel_requested',check_after=NULL WHERE id=? AND paid_at IS NULL",

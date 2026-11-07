@@ -191,6 +191,14 @@ def approve(
             )
             row = db.execute("SELECT * FROM plan_orders WHERE id=?", (oid,)).fetchone()
     order = dict(row)
+    if (
+        order.get("policy_snapshot")
+        and order["method"] == "administrative"
+        and order["local_method"] != payment_method
+    ):
+        raise ValueError(
+            "Confira a modalidade do pedido existente antes de confirmar o recebimento. Cancele o pedido antes de mudar a modalidade."
+        )
     if order["method"] == "pix" and order["state"] in service.OPEN_STATES + (
         "cancel_requested",
     ):
@@ -261,7 +269,8 @@ def cancel(db, app, order_id, actor, reason, operation_id, value, settings):
     closed = False
     data = None
     no_external = not order["transaction_id"] and (
-        order["state"] in ("failed", "declined")
+        order["method"] == "administrative"
+        or order["state"] in ("failed", "declined")
         or (order["state"] == "creating" and order["creation_started_at"] == "")
     )
     if no_external:
@@ -323,7 +332,8 @@ def cancel(db, app, order_id, actor, reason, operation_id, value, settings):
     if no_external:
         # Creation may have started between the first read and this lock.
         closed = not order["transaction_id"] and (
-            order["state"] in ("failed", "declined")
+            order["method"] == "administrative"
+            or order["state"] in ("failed", "declined")
             or (order["state"] == "creating" and order["creation_started_at"] == "")
         )
     state = "admin_cancelled" if closed else "cancel_requested"

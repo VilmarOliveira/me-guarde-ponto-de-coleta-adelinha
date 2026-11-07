@@ -286,6 +286,8 @@ def reserve_order(
 
 
 def validate_transaction(order, data):
+    if order["method"] == "administrative":
+        raise GatewayError(code="wrong_payment_method")
     if not isinstance(data, dict):
         raise GatewayError(code="invalid_response")
     tid = transaction_id(data.get("id", data.get("transaction_id")))

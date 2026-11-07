@@ -21,6 +21,7 @@ from fastflow_gateway import FastFlow, Settings, GatewayError
 from client_compliance import compliance
 import client_actions
 import plan_service as service
+import payment_policies as policies
 import plan_administration as administration
 import uuid
 from database import DatabaseIntegrityError, DatabaseConnection
@@ -198,7 +199,7 @@ def install(
         )
         code = (
             order["qr_text"]
-            if order["method"] == "pix"
+            if (order["method"] == "pix" or order["local_method"] == "Pix AI")
             and order["state"] in ("pending", "approved", "under_review")
             else None
         )
@@ -209,6 +210,11 @@ def install(
             labels=LABELS,
             qr=qr_data(code) if code else None,
             plan_rules=service.PLAN_RULES,
+            payment_choice=(
+                json.loads(order["policy_snapshot"])
+                if order["policy_snapshot"]
+                else None
+            ),
         )
 
     @bp.get("/plano/assinar")
@@ -269,9 +275,6 @@ def install(
         person = owner()
         if session.get("staff"):
             abort(403)
-        if not settings().ready:
-            flash("Pagamentos do plano ainda não estão habilitados.", "error")
-            return redirect(url_for("plans.client_hub"))
         if eligible(db(), person, now()):
             flash(
                 "Resolva as pendências necessárias antes de contratar ou renovar o plano.",
@@ -280,6 +283,25 @@ def install(
             return redirect(url_for("client_actions.hub"))
         if request.form.get("plan_rules") != "yes":
             flash("Confirme a leitura das regras do plano.", "error")
+            return redirect(url_for("plans.client_hub"))
+        current, upcoming, history = service.cycles(db(), person["id"], now())
+        scope = "renewal" if history else "subscription"
+        cycle_key = service.next_cycle_key(db(), person["id"], now())
+        pending = (
+            db()
+            .execute(
+                "SELECT * FROM plan_orders WHERE client_id=? AND cycle_key=? AND state IN ('creating','uncertain','pending','approved','under_review','cancel_requested') ORDER BY created_at DESC LIMIT 1",
+                (person["id"], cycle_key),
+            )
+            .fetchone()
+        )
+        if pending:
+            return redirect(url_for("plans.payment", oid=pending["id"]))
+        choice = policies.select(
+            db(), app, scope, service.AMOUNT_CENTS, client_id=person["id"]
+        )
+        if not choice:
+            flash("Nenhuma modalidade disponível. Procure o ponto.", "error")
             return redirect(url_for("plans.client_hub"))
         method = request.form.get("method", "pix")
         if method not in ("pix", "card"):
@@ -308,11 +330,28 @@ def install(
                 "expiration": expiration,
                 "cvv": cvv,
             }
-        order, mode = service.reserve_order(db(), person, method, now(), settings())
+        manual = choice["method"] != "Pix Fast"
+        order, mode = service.reserve_order(
+            db(), person, "administrative" if manual else method, now(), settings()
+        )
         if not order:
             flash(mode, "info")
             return redirect(url_for("plans.client_hub"))
         if mode != "create":
+            return redirect(url_for("plans.payment", oid=order["id"]))
+        code = policies.local_code(db(), choice["method"], service.AMOUNT_CENTS)
+        db().execute(
+            "UPDATE plan_orders SET local_method=?,policy_snapshot=?,qr_text=?,state=? WHERE id=?",
+            (
+                choice["method"],
+                json.dumps(choice, ensure_ascii=False),
+                code,
+                "pending" if manual else "creating",
+                order["id"],
+            ),
+        )
+        db().commit()
+        if manual:
             return redirect(url_for("plans.payment", oid=order["id"]))
         import plan_charge
 
@@ -344,7 +383,12 @@ def install(
         order = get_order(oid, person["id"])
         return {
             "state": order["state"],
-            "label": LABELS.get(order["state"], "Em consulta"),
+            "label": (
+                "Verificando cobrança"
+                if order["state"] in ("creating", "uncertain", "cancel_requested")
+                or order["error_code"]
+                else LABELS.get(order["state"], "Em consulta")
+            ),
             "done": order["state"] not in service.OPEN_STATES,
         }
 
@@ -934,7 +978,50 @@ def install(
                 and Path(app.config["ME_GUARDE_MAIS_LOGO_PATH"]).is_file()
             ),
             "plan_package_coverage": lambda pid: service.coverage(db(), pid),
-            "package_coverage_description": lambda package: service.coverage_description(db(), package),
+            "package_coverage_description": lambda package: service.coverage_description(
+                db(), package
+            ),
         }
+
+    @app.context_processor
+    def payment_choice_context():
+        if not session.get("client_id"):
+            return {}
+        person = owner()
+        if not person:
+            return {}
+        _, _, history = service.cycles(db(), person["id"], now())
+        choice = policies.select(
+            db(),
+            app,
+            "renewal" if history else "subscription",
+            service.AMOUNT_CENTS,
+            client_id=person["id"],
+        )
+        pending = (
+            db()
+            .execute(
+                "SELECT * FROM plan_orders WHERE client_id=? AND state IN ('creating','uncertain','pending','approved','under_review','cancel_requested') ORDER BY created_at DESC LIMIT 1",
+                (person["id"],),
+            )
+            .fetchone()
+        )
+        if pending:
+            choice = (
+                json.loads(pending["policy_snapshot"])
+                if pending["policy_snapshot"]
+                else {
+                    "method": pending["local_method"] or "Pix Fast",
+                    "title": pending["local_method"] or "Pix Fast",
+                    "text": "",
+                }
+            )
+            if pending["state"] in ("creating", "uncertain", "cancel_requested"):
+                choice = {
+                    **choice,
+                    "title": "Verificando cobrança",
+                    "text": "Consulte a cobrança existente antes de trocar de modalidade.",
+                }
+        return {"customer_plan_choice": choice}
 
     app.register_blueprint(bp)

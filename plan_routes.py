@@ -21,6 +21,7 @@ from fastflow_gateway import FastFlow, Settings, GatewayError
 from client_compliance import compliance
 import client_actions
 import plan_service as service
+import plan_pricing as pricing
 import payment_policies as policies
 import plan_administration as administration
 import uuid
@@ -209,7 +210,7 @@ def install(
             cycle=cycle,
             labels=LABELS,
             qr=qr_data(code) if code else None,
-            plan_rules=service.PLAN_RULES,
+            plan_rules=order["rules_text"],
             payment_choice=(
                 json.loads(order["policy_snapshot"])
                 if order["policy_snapshot"]
@@ -265,9 +266,35 @@ def install(
                 (person["id"],),
             )
             .fetchall(),
-            plan_rules=service.PLAN_RULES,
+            plan_rules=service.offered_rules(db()),
             logo=bool(app.config.get("ME_GUARDE_MAIS_LOGO_PATH")),
         )
+
+    @bp.post("/painel/configuracoes/plano/mensalidade")
+    @admin_required
+    def update_monthly_price():
+        admin()
+        try:
+            cents = pricing.parse(request.form.get("monthly_price", ""))
+        except ValueError as exc:
+            flash(str(exc), "error")
+            return redirect(url_for("plans.admin_hub"))
+        previous = pricing.current(db())
+        db().execute("UPDATE settings SET monthly_price_cents=? WHERE id=1", (cents,))
+        db().execute(
+            "INSERT INTO audit_logs(actor,action,entity_type,entity_id,details,created_at) VALUES(?,?,?,?,?,?)",
+            (
+                actor()["key"],
+                "alterar_mensalidade",
+                "plano",
+                1,
+                json.dumps({"previous_cents": previous, "new_cents": cents}),
+                service.iso(now()),
+            ),
+        )
+        db().commit()
+        flash("Mensalidade atualizada com sucesso.", "success")
+        return redirect(url_for("plans.admin_hub"))
 
     @bp.post("/cliente/plano/assinar")
     @client_required
@@ -298,7 +325,7 @@ def install(
         if pending:
             return redirect(url_for("plans.payment", oid=pending["id"]))
         choice = policies.select(
-            db(), app, scope, service.AMOUNT_CENTS, client_id=person["id"]
+            db(), app, scope, pricing.current(db()), client_id=person["id"]
         )
         if not choice:
             flash("Nenhuma modalidade disponível. Procure o ponto.", "error")
@@ -332,14 +359,38 @@ def install(
             }
         manual = choice["method"] != "Pix Fast"
         order, mode = service.reserve_order(
-            db(), person, "administrative" if manual else method, now(), settings()
+            db(),
+            person,
+            "administrative" if manual else method,
+            now(),
+            settings(),
+            expected_amount=request.form.get("price_cents"),
         )
         if not order:
             flash(mode, "info")
             return redirect(url_for("plans.client_hub"))
         if mode != "create":
             return redirect(url_for("plans.payment", oid=order["id"]))
-        code = policies.local_code(db(), choice["method"], service.AMOUNT_CENTS)
+        choice = policies.select(
+            db(), app, scope, order["amount_cents"], client_id=person["id"]
+        )
+        if not choice:
+            db().execute(
+                "UPDATE plan_orders SET state='failed' WHERE id=?", (order["id"],)
+            )
+            db().commit()
+            flash(
+                "Nenhuma modalidade disponível para este valor. Procure o ponto.",
+                "error",
+            )
+            return redirect(url_for("plans.client_hub"))
+        manual = choice["method"] != "Pix Fast"
+        db().execute(
+            "UPDATE plan_orders SET method=? WHERE id=?",
+            ("administrative" if manual else method, order["id"]),
+        )
+        order = {**order, "method": "administrative" if manual else method}
+        code = policies.local_code(db(), choice["method"], order["amount_cents"])
         db().execute(
             "UPDATE plan_orders SET local_method=?,policy_snapshot=?,qr_text=?,state=? WHERE id=?",
             (
@@ -639,6 +690,14 @@ def install(
             try:
                 if request.form.get("confirm") != "yes":
                     raise ValueError("Confirme a ação antes de continuar.")
+                if (
+                    not order
+                    and request.form.get("price_cents") is not None
+                    and request.form["price_cents"] != str(pricing.current(db()))
+                ):
+                    raise ValueError(
+                        "A mensalidade mudou. Confira o novo valor e abra a prévia novamente."
+                    )
                 if action == "approve":
                     if not person["active"]:
                         raise ValueError(
@@ -730,7 +789,11 @@ def install(
             ai_code = pix_payload(
                 setting["pix_key"],
                 setting["pix_receiver_name"],
-                service.public_offer()["monthly_price"],
+                (
+                    order["amount_cents"] / 100
+                    if order
+                    else service.public_offer(db())["monthly_price"]
+                ),
             )
         return render_template(
             "plan_admin_decision.html",
@@ -972,7 +1035,7 @@ def install(
                     else "Cartão"
                 )
             ),
-            "public_plan_offer": service.public_offer(),
+            "public_plan_offer": service.public_offer(db()),
             "public_plan_logo": bool(
                 app.config.get("ME_GUARDE_MAIS_LOGO_PATH")
                 and Path(app.config["ME_GUARDE_MAIS_LOGO_PATH"]).is_file()
@@ -995,7 +1058,7 @@ def install(
             db(),
             app,
             "renewal" if history else "subscription",
-            service.AMOUNT_CENTS,
+            pricing.current(db()),
             client_id=person["id"],
         )
         pending = (

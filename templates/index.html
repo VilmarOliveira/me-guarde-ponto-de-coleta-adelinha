@@ -9,7 +9,7 @@
 {% if banners|length > 1 %}<div class="banner-controls">{% for b in banners %}<button type="button" data-slide-to="{{ loop.index0 }}" aria-label="Mostrar banner {{ loop.index }}" aria-controls="home-banner-slides"{% if loop.first %} aria-current="true"{% endif %}></button>{% endfor %}</div>{% endif %}
 </div></section>{% endif %}
 
-<section class="home-section"><div class="section-head"><h2>Veja um exemplo de como é fácil usar nosso serviço</h2></div>
+<section class="home-section" id="como-funciona"><nav class="actions" aria-label="Conheça o serviço"><a class="button ghost" href="#como-funciona">{{ icon('box') }} Como funciona</a><a class="button ghost" href="#planos-e-precos">{{ icon('tag') }} Preços e planos</a><a class="button ghost" href="{{ url_for('faq') }}">{{ icon('help') }} Prazos e dúvidas</a></nav><div class="section-head"><h2>Veja um exemplo de como é fácil usar nosso serviço</h2></div>
 <div class="explanatory-grid">{% for card in explanatory_cards %}<article>
 <h3>{{ card.id }}. {{ card.title }}</h3>
 <a class="explanatory-open" data-card-enlarge href="{{ url_for('explanatory_card_image',card_id=card.id,variant='original',v=card.revision) }}" aria-label="Ampliar: {{ card.title }}" data-title="{{ card.title }}" data-alt="{{ card.alt_text }}">

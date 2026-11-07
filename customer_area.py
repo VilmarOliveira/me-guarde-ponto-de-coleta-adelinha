@@ -105,7 +105,7 @@ def context(db, client, value, fees):
             (client["id"],),
         ).fetchone(),
         labels=plan_routes.LABELS,
-        plan_rules=plans.PLAN_RULES,
+        plan_rules=plans.offered_rules(db),
         card_ready=False,
         embedded_plan=True,
         logo=False,

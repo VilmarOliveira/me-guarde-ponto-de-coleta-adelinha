@@ -6,6 +6,7 @@ never recomputed from the customer's current plan.
 """
 
 import re
+import plan_pricing as pricing
 import calendar
 import uuid
 from datetime import datetime, timedelta
@@ -21,7 +22,8 @@ LARGE_CREDIT_COST = 2
 OPEN_STATES = ("creating", "uncertain", "pending", "approved", "under_review")
 
 
-def public_offer():
+def public_offer(db=None):
+    price = pricing.current(db) if db is not None else AMOUNT_CENTS
     from core import (
         SMALL_PACKAGE_PRICE,
         LARGE_PACKAGE_PRICE,
@@ -38,17 +40,40 @@ def public_offer():
         round(LARGE_PACKAGE_PRICE * 100) * large_count,
     )
     return dict(
-        monthly_price=AMOUNT_CENTS / 100,
+        monthly_price=price / 100,
+        price_cents=price,
+        small_unit=price / 100 / small_count,
+        large_unit=price / 100 / large_count,
+        small_saving=max(
+            0, (1 - (price / 100 / small_count) / SMALL_PACKAGE_PRICE) * 100
+        ),
+        large_saving=max(
+            0, (1 - (price / 100 / large_count) / LARGE_PACKAGE_PRICE) * 100
+        ),
         small_price=SMALL_PACKAGE_PRICE,
         large_price=LARGE_PACKAGE_PRICE,
         small_count=small_count,
         large_count=large_count,
         large_equivalent=LARGE_CREDIT_COST // SMALL_CREDIT_COST,
-        saving_percent=max(0, (avulso_cents - AMOUNT_CENTS) * 100 // avulso_cents),
+        saving_percent=max(0, (avulso_cents - price) * 100 // avulso_cents),
         small_sum=SMALL_PACKAGE_MAX_SUM,
         large_sum=LARGE_PACKAGE_MAX_SUM,
         small_weight=SMALL_PACKAGE_MAX_WEIGHT,
         large_weight=LARGE_PACKAGE_MAX_WEIGHT,
+    )
+
+
+def offered_rules(db, cents=None):
+    cents = pricing.current(db) if cents is None else cents
+    return PLAN_RULES.replace("R$ 33,90", "R$ " + pricing.money(cents))
+
+
+def offered_version(db, cents=None):
+    cents = pricing.current(db) if cents is None else cents
+    return (
+        PLAN_RULES_VERSION
+        if cents == AMOUNT_CENTS
+        else PLAN_RULES_VERSION + "-price-" + str(cents)
     )
 
 
@@ -217,7 +242,15 @@ def next_cycle_key(db, client_id, value):
 
 
 def reserve_order(
-    db, owner, method, value, settings, *, expected_key=None, accepted_by_client=True
+    db,
+    owner,
+    method,
+    value,
+    settings,
+    *,
+    expected_key=None,
+    accepted_by_client=True,
+    expected_amount=None,
 ):
     db.commit()
     db.begin_write()
@@ -246,6 +279,10 @@ def reserve_order(
     if old:
         db.commit()
         return dict(old), None
+    price = pricing.current(db)
+    if expected_amount is not None and str(price) != str(expected_amount):
+        db.commit()
+        return None, "A mensalidade mudou. Confira o novo valor antes de confirmar."
     db.execute(
         "SELECT id FROM plan_gateway_lock WHERE id=1"
         + (" FOR UPDATE" if db.postgres else "")
@@ -267,14 +304,14 @@ def reserve_order(
             oid,
             owner["id"],
             method,
-            AMOUNT_CENTS,
+            price,
             key,
             current["id"] if current else None,
             stamp,
             re.sub(r"\D", "", owner["cpf"]),
             settings.callback(oid),
-            PLAN_RULES_VERSION,
-            PLAN_RULES,
+            offered_version(db, price),
+            offered_rules(db, price),
             stamp if accepted_by_client else "",
         ),
     )
@@ -296,7 +333,7 @@ def validate_transaction(order, data):
             "A transação não corresponde ao pedido.", code="identity_mismatch"
         )
     if data.get("payment_provider") != "fastflow" or not money_matches(
-        data.get("amount")
+        data.get("amount"), order["amount_cents"]
     ):
         raise GatewayError(
             "Provedor ou valor divergente. O plano não foi liberado.",
@@ -333,8 +370,13 @@ def attach_creation_id(db, order_id, data, value):
         "SELECT 1 FROM pickup_payment_orders WHERE transaction_id=?", (tid,)
     ).fetchone():
         raise GatewayError(code="identity_mismatch")
+    original = db.execute(
+        "SELECT * FROM plan_orders WHERE id=?", (order_id,)
+    ).fetchone()
+    if not original:
+        raise GatewayError(code="unknown_order")
     if data.get("payment_provider") != "fastflow" or not money_matches(
-        data.get("amount")
+        data.get("amount"), original["amount_cents"]
     ):
         raise GatewayError(code="amount_provider_mismatch")
     db.commit()

@@ -53,7 +53,7 @@ def reconcile(db, config, value, limit=12):
     rows = (
         db.execute(
             """SELECT id FROM plan_orders WHERE
-        (state IN ('creating','uncertain','pending','approved','under_review','cancel_requested') AND (check_after IS NULL OR check_after<=?))
+        (method!='administrative' AND state IN ('creating','uncertain','pending','approved','under_review','cancel_requested') AND (check_after IS NULL OR check_after<=?))
         OR (state IN ('paid','manual_approved','admin_cancelled') AND method!='administrative' AND (checked_at IS NULL OR checked_at<?))
         ORDER BY COALESCE(checked_at,''),created_at LIMIT ?""",
             (service.iso(value), service.iso(value - timedelta(hours=6)), limit),

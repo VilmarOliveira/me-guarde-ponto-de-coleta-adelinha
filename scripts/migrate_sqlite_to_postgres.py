@@ -4,6 +4,8 @@ Uso: defina DATABASE_URL e execute este arquivo passando opcionalmente o caminho
 do SQLite. Faça backup antes. Conflitos de chave são mantidos no destino.
 """
 import os
+import json
+from payment_policies import defaults as payment_defaults
 import sqlite3
 import sys
 from pathlib import Path
@@ -16,7 +18,7 @@ TABLES = (
     "login_attempts", "audit_logs", "settings", "blog_posts", "blog_icon_assets", "blog_icons", "verification_codes",
     "reminder_logs", "site_banners", "site_photos", "site_themes", "staff_users",
     "staff_recovery_codes", "id_sequences", "analytics_events",
-    "plan_api_budget", "plan_accounts", "plan_orders", "plan_cycles", "plan_credit_ledger", "plan_payment_events", "plan_reminders", "plan_admin_decisions", "pickup_payment_orders", "pickup_payment_packages", "pickup_payment_reservations", "pickup_payment_events", "package_prepayments",
+    "plan_api_budget", "plan_accounts", "plan_orders", "plan_cycles", "plan_credit_ledger", "plan_payment_events", "plan_reminders", "plan_admin_decisions", "pickup_payment_orders", "pickup_payment_packages", "pickup_payment_reservations", "pickup_payment_events", "package_prepayments", "customer_payment_policies",
 )
 
 
@@ -40,6 +42,12 @@ def migrate(source_path, database_url):
             placeholders = ",".join("?" for _ in columns)
             column_sql = ",".join(columns)
             for row in source.execute(f"SELECT {column_sql} FROM {table}"):
+                if table=='customer_payment_policies':
+                    existing=target.execute('SELECT rules FROM customer_payment_policies WHERE scope=?',(row['scope'],)).fetchone()
+                    if existing and json.loads(existing['rules'])==payment_defaults():
+                        target.execute('UPDATE customer_payment_policies SET rules=? WHERE scope=?',(row['rules'],row['scope']))
+                    elif existing and json.loads(existing['rules'])!=json.loads(row['rules']):
+                        raise ValueError('Configurações de pagamento diferentes no destino. Confira as três abas antes de migrar.')
                 target.execute(
                     f"INSERT INTO {table} ({column_sql}) VALUES ({placeholders}) ON CONFLICT DO NOTHING",
                     tuple(row[column] for column in columns),

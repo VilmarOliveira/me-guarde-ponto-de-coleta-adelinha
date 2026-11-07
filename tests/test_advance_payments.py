@@ -168,8 +168,12 @@ def test_advance_limits_and_ignore_client_prices(payments, amount, allowed):
         surcharge_amount="900",
         surcharge_reason="forged",
     )
-    assert response.status_code == (200 if allowed else 400)
+    assert response.status_code == (200 if amount > 0 else 400)
     assert fake.creates == int(allowed)
+    if amount > 0:
+        order = db.execute("SELECT * FROM pickup_payment_orders").fetchone()
+        assert order["local_method"] == ("Pix Fast" if allowed else "Pix AI")
+        assert order["amount_cents"] == round(amount * 100)
     if allowed:
         assert db.execute("SELECT amount_cents FROM pickup_payment_orders").fetchone()[
             "amount_cents"

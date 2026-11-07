@@ -216,3 +216,11 @@ PYTHONPATH=/tmp/adelinha-browser-py .venv/bin/python tests/browser/settings_navi
 ```
 
 Servidor isolado em `127.0.0.1:5085`. Confere cartões 4/2/1, geometria e foco, abas e salvamento, tipos de gráfico e manutenção de período, usando dados fictícios e sete larguras. Resultados e capturas na pasta temporária informada.
+
+## Ordem dos pagamentos e abas
+
+```bash
+PYTHONPATH=/tmp/adelinha-browser-py .venv/bin/python tests/browser/payment_order_layout.py
+```
+
+Fixture isolada em `127.0.0.1:5089`. Verifica sete larguras, margens das abas, leitura dos valores completos, arraste de mouse, controles por teclado e toque, interruptores e ordem persistida nas três abas sem alterações cruzadas. Sem cobranças reais.

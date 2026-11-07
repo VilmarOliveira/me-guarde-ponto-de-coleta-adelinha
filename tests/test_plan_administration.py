@@ -246,7 +246,7 @@ def test_cancel_api_failure_keeps_existing_request(site, monkeypatch):
     monkeypatch.setattr(fake, "cancel", fail, raising=False)
     path = "/painel/configuracoes/plano/pedidos/" + order["id"] + "/cancel"
     assert client.post(path, data=fields(client, path)).status_code == 302
-    assert db.execute("SELECT state FROM plan_orders").fetchone()["state"] == "cancel_requested"
+    assert db.execute("SELECT state FROM plan_orders").fetchone()["state"] == "pending"
     assert db.execute("SELECT result FROM plan_admin_decisions").fetchone()["result"]=="awaiting_verification"
 
 
@@ -268,7 +268,7 @@ def test_late_paid_after_admin_cancel_does_not_activate_or_erase_history(site):
         ps.apply_transaction(db, order["id"], data, START + timedelta(days=1))
     row = db.execute("SELECT * FROM plan_orders").fetchone()
     assert (
-        row["state"] == "admin_cancelled"
+        row["state"] == "paid"
         and row["paid_at"]
         and row["error_code"] == "payment_after_cancellation"
     )
@@ -413,7 +413,7 @@ def test_uncertain_request_without_remote_match_is_not_closed(site):
     response = client.post(path, data=fields(client, path),follow_redirects=True)
     assert response.status_code == 200 and "Cancelamento aguardando verificação" in response.text
     assert (
-        db.execute("SELECT state FROM plan_orders").fetchone()["state"] == "cancel_requested"
+        db.execute("SELECT state FROM plan_orders").fetchone()["state"] == "uncertain"
     )
     assert db.execute("SELECT result FROM plan_admin_decisions").fetchone()["result"]=="awaiting_verification"
 

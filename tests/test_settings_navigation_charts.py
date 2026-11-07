@@ -141,12 +141,12 @@ def test_graphs_use_same_pageview_total_and_preserve_period(payments):
     bars = client.get(path).text
     assert (
         "Visitas por dia" in bars
-        and 'class="chart-row"' in bars
+        and 'class="chart-column"' in bars
         and '<circle cx="50"' not in bars
     )
     assert "period=custom&amp;start=2026-10-01&amp;end=2026-10-02&amp;graph=pie" in bars
     pie = client.get(path + "&graph=pie").text
-    assert 'class="chart-row"' not in pie and '<circle cx="50"' in pie
+    assert 'class="chart-column"' not in pie and '<circle cx="50"' in pie
     assert (
         "Celular — 2 visita(s) — 66,7%" in pie
         and "Computador — 1 visita(s) — 33,3%" in pie

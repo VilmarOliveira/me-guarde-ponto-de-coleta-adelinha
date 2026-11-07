@@ -121,7 +121,7 @@ def test_six_tabs_owned_counts_and_password_rotation(payments):
     package(db)
     for tab in ("visao-geral", "pacotes", "plano", "historico", "dados", "contratos"):
         page = client.get("/cliente?aba=" + tab)
-        assert page.status_code == 200 and "Menu da área" in page.text
+        assert page.status_code == 200 and 'class="customer-tabs"' in page.text
     assert client.get("/cliente?aba=invalid").status_code == 404
     other = app.test_client()
     with client.session_transaction() as s:
@@ -384,7 +384,7 @@ def test_cancellation_403_is_pending_with_sanitized_diagnostics(payments, monkey
         raise GatewayError(
             code="rejected",
             http_status=403,
-            http_method="PUT",
+            http_method="DELETE",
             http_endpoint="/transactions/1",
         )
 
@@ -395,11 +395,11 @@ def test_cancellation_403_is_pending_with_sanitized_diagnostics(payments, monkey
     )
     assert "Cancelamento aguardando verificação" in response.text
     row = db.execute("SELECT * FROM plan_orders").fetchone()
-    assert row["state"] == "cancel_requested" and row["paid_at"] is None
+    assert row["state"] == "pending" and row["paid_at"] is None
     decision = db.execute("SELECT * FROM plan_admin_decisions").fetchone()
     assert (
         decision["http_status"] == 403
-        and decision["http_method"] == "PUT"
+        and decision["http_method"] == "DELETE"
         and decision["result"] == "awaiting_verification"
     )
     fake.records["1"]["status"] = "paid"
@@ -411,7 +411,7 @@ def test_cancellation_403_is_pending_with_sanitized_diagnostics(payments, monkey
     )
 
 
-def test_cancel_documented_put_and_http_metadata(monkeypatch):
+def test_cancel_documented_delete_and_http_metadata(monkeypatch):
     calls = []
 
     class Reply:
@@ -427,7 +427,7 @@ def test_cancel_documented_put_and_http_metadata(monkeypatch):
     )
     with pytest.raises(GatewayError) as result:
         FastFlow(Settings.from_config(CONFIG)).cancel("12")
-    assert calls[0][0] == "PUT" and calls[0][2]["json"] == {"status": "cancelled"}
+    assert calls[0][0] == "DELETE" and calls[0][2]["json"] is None
     assert (
         result.value.http_status == 403
         and result.value.http_endpoint == "/transactions/12"
@@ -648,7 +648,7 @@ def test_cancellation_rechecks_creation_marker_under_lock(payments, monkeypatch)
         db.execute(
             "SELECT state FROM plan_orders WHERE id=?", (order["id"],)
         ).fetchone()["state"]
-        == "cancel_requested"
+        == "creating"
     )
     assert fake.creates == 0
     assert not db.execute("SELECT 1 FROM plan_cycles").fetchone()
@@ -673,7 +673,7 @@ def test_pickup_cancel_validates_binding_before_remote_mutation(payments, monkey
     assert calls == []
     assert (
         db.execute("SELECT state FROM pickup_payment_orders").fetchone()["state"]
-        == "cancel_requested"
+        == "pending"
     )
     assert (
         db.execute("SELECT status FROM packages WHERE id=?", (pid,)).fetchone()[

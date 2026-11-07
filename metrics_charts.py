@@ -1,6 +1,7 @@
 """Accessible chart data from the existing pageview metrics, without third parties."""
 
 from collections import Counter
+import math
 from datetime import datetime
 from core import TZ
 
@@ -25,7 +26,9 @@ def build(events, devices, monthly=False):
         for key, value in sorted(counts.items())
     ]
     maximum = max(counts.values(), default=1)
+    axis_max = max(4, math.ceil(maximum / 4) * 4)
     for bar in bars:
+        bar["height"] = 100 * bar["count"] / axis_max
         bar["width"] = 100 * bar["count"] / maximum
     total = sum(row["total"] for row in devices)
     segments = []
@@ -47,4 +50,10 @@ def build(events, devices, monthly=False):
             }
         )
         offset += share
-    return {"bars": bars, "segments": segments, "total": total, "monthly": monthly}
+    return {
+        "ticks": [int(axis_max * (4 - i) / 4) for i in range(5)],
+        "bars": bars,
+        "segments": segments,
+        "total": total,
+        "monthly": monthly,
+    }

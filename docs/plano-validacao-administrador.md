@@ -22,7 +22,7 @@ Use o filtro de solicitações não pagas e o botão existente **Cancelar solici
 
 - Sem transação e com evidência de que a criação não ocorreu, encerra somente o pedido local.
 - Havendo cobrança, consulta e valida os dados. Se paga ou com ciclo liberado, recusa o cancelamento simples.
-- Para cobrança aberta, utiliza o método documentado `PUT /transactions/{id}`, com `status=cancelled`, e consulta novamente. O fluxo anterior utilizava DELETE; a nova chamada não pressupõe autorização da conta do provedor.
+- Para cobrança aberta, utiliza o método documentado `DELETE /transactions/{id}` e consulta novamente. Somente o estado confirmado pelo provedor encerra a cobrança. Falhas preservam o status financeiro anterior.
 - Consulta indisponível, histórico incerto ou recusa remota mantém **Cancelamento aguardando verificação**. O pedido não é apresentado como cancelado com sucesso. A ação existente permite verificar novamente; o job também acompanha a situação.
 
 O histórico registra administrador, data, motivo e resultado. Falhas HTTP incluem apenas método, endpoint e código HTTP, sem credenciais ou corpo da resposta. A causa HTTP exata da instalação Oracle não pôde ser observada neste ambiente; esses diagnósticos permitem identificá-la na próxima tentativa. Recusa de permissão no provedor exige conferência da conta FastFlow.

@@ -255,6 +255,13 @@ def reserve_order(
     db.commit()
     db.begin_write()
     lock_account(db, owner["id"], value)
+    unresolved = db.execute(
+        "SELECT * FROM plan_orders WHERE client_id=? AND (state IN ('creating','uncertain','pending','approved','under_review','cancel_requested') OR error_code IN ('archived_payment_review','payment_after_cancellation')) ORDER BY created_at DESC LIMIT 1",
+        (owner["id"],),
+    ).fetchone()
+    if unresolved:
+        db.commit()
+        return dict(unresolved), None
     current, future, _ = cycles(db, owner["id"], value)
     if future and not future["suspended"]:
         db.commit()
@@ -499,7 +506,7 @@ def apply_transaction(db, order_id, data, value):
         else None
     )
     db.execute(
-        """UPDATE plan_orders SET transaction_id=?,checked_at=?,check_after=?,qr_text=COALESCE(?,qr_text),expires_at=COALESCE(?,expires_at),settlement_state=?,card_brand=?,card_last4=?,error_code=CASE WHEN state IN ('admin_cancelled','cancel_requested') OR error_code='duplicate_manual_and_fast_payment' THEN error_code ELSE NULL END WHERE id=?""",
+        """UPDATE plan_orders SET transaction_id=?,checked_at=?,check_after=?,qr_text=COALESCE(?,qr_text),expires_at=COALESCE(?,expires_at),settlement_state=?,card_brand=?,card_last4=?,error_code=CASE WHEN state IN ('admin_cancelled','cancel_requested') OR error_code IN ('duplicate_manual_and_fast_payment','archived_payment_review','payment_after_cancellation') THEN error_code ELSE NULL END WHERE id=?""",
         (
             tid,
             iso(value),
@@ -519,6 +526,39 @@ def apply_transaction(db, order_id, data, value):
         "SELECT 1 FROM plan_admin_decisions WHERE order_id=? AND action='approve'",
         (order_id,),
     ).fetchone()
+    if order["archived_at"] and state == "paid" and not cycle:
+        db.execute(
+            "UPDATE plan_orders SET state='paid',paid_at=COALESCE(paid_at,?),error_code='archived_payment_review' WHERE id=?",
+            (iso(value), order_id),
+        )
+        db.commit()
+        return
+    if order["cancel_state"] in ("external_pending", "closed") and not cycle:
+        if state == "paid":
+            db.execute(
+                "UPDATE plan_orders SET state='paid',paid_at=COALESCE(paid_at,?),error_code='payment_after_cancellation' WHERE id=?",
+                (iso(value), order_id),
+            )
+        elif state == "refunded":
+            db.execute(
+                "UPDATE plan_orders SET state='refunded',refunded_at=COALESCE(refunded_at,?) WHERE id=?",
+                (iso(value), order_id),
+            )
+        elif not order["paid_at"]:
+            db.execute(
+                "UPDATE plan_orders SET state=?,cancel_state=? WHERE id=?",
+                (
+                    "admin_cancelled" if state == "cancelled" else state,
+                    (
+                        "closed"
+                        if state in ("cancelled", "expired")
+                        else "external_pending"
+                    ),
+                    order_id,
+                ),
+            )
+        db.commit()
+        return
     if order["state"] in ("admin_cancelled", "cancel_requested"):
         if state == "paid":
             db.execute(

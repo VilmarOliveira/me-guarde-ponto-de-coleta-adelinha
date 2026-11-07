@@ -15,7 +15,7 @@ def test_privacy_public_truthful_notice_links_and_no_contract_changes(tmp_path):
     assert page.status_code==200
     for text in ('Política de Privacidade','AMOR INFINITO MARKETING E SOLUCOES EMPRESARIAIS','Ponto de Coleta Adelinha',
                  'mailto:pontodecoletaadelinha@gmail.com','Última atualização','3 de novembro de 2026','sessionStorage','ViaCEP',
-                 'FastFlow','não são armazenados','Uso Limitado','openid','email','Minuta para revisão','não oferece painel de preferências','não define um prazo único'):
+                 'Fast','não são armazenados','Uso Limitado','openid','email','Minuta para revisão','não oferece painel de preferências','não define um prazo único'):
         assert text in page.text
     assert 'name="robots" content="noindex"' in page.text
     assert 'no-store' in page.headers['Cache-Control']
@@ -25,8 +25,8 @@ def test_privacy_public_truthful_notice_links_and_no_contract_changes(tmp_path):
         html=client.get(endpoint).text
         footer=html.split('<footer>',1)[1].split('</footer>',1)[0]
         assert 'href="/condicoes"' in footer and 'href="/privacidade"' in footer
-    home=client.get('/').text
-    assert 'href="/privacidade?next=/%23cadastro"' in home
+    home=client.get('/cadastro').text
+    assert 'href="/privacidade?next=/cadastro"' in home
     assert home.count('name="terms_accept"')==1 and 'name="privacy_accept"' not in home
     assert 'consulta não autoriza publicidade' in home
     assert 'target="_blank" rel="noopener noreferrer"' in home

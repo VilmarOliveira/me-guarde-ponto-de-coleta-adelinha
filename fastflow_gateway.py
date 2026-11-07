@@ -1,4 +1,4 @@
-"""FastFlow API adapter, based on the owner's supplied API documentation.
+"""Fast API adapter, based on the owner's supplied API documentation.
 
 No POST retries: the documented PIX API has no idempotency key. Exceptions never
 contain response bodies, request payloads, card numbers, CVV or credentials.
@@ -20,7 +20,7 @@ CARD_CHECKOUT_AVAILABLE = False
 class GatewayError(Exception):
     def __init__(
         self,
-        message="FastFlow temporariamente indisponível. Tente consultar o pagamento novamente.",
+        message="Fast temporariamente indisponível. Tente consultar o pagamento novamente.",
         *,
         uncertain=False,
         code="unavailable",
@@ -95,7 +95,7 @@ def transaction_id(value):
     value = str(value)
     if not re.fullmatch("[1-9][0-9]{0,29}", value):
         raise GatewayError(
-            "A FastFlow retornou um identificador inválido.", code="invalid_response"
+            "A Fast retornou um identificador inválido.", code="invalid_response"
         )
     return value
 
@@ -142,21 +142,23 @@ class FastFlow:
             )
         if response.status_code == 403 and path.startswith("/card-in"):
             raise failure(
-                "Cartão não habilitado na conta FastFlow. O Pix continua disponível.",
+                "Cartão não habilitado na conta Fast. O Pix continua disponível.",
                 code="card_disabled",
             )
         if response.status_code == 429:
             raise failure(
-                "Limite de consultas da FastFlow atingido. Aguarde antes de tentar novamente.",
+                "Limite de consultas da Fast atingido. Aguarde antes de tentar novamente.",
                 code="rate_limited",
             )
         if response.status_code >= 500 or 300 <= response.status_code < 400:
             raise failure(uncertain=method == "POST")
         if response.status_code in (400, 401, 403, 404, 422):
             raise failure(
-                "A FastFlow não autorizou a operação. Confira a configuração e os dados do cadastro.",
+                "A Fast não autorizou a operação. Confira a configuração e os dados do cadastro.",
                 code="rejected",
             )
+        if method == "DELETE" and response.status_code == 204:
+            return {}  # The caller still confirms cancellation with a validated GET.
         try:
             data = response.json()
         except (ValueError, TypeError):
@@ -238,12 +240,7 @@ class FastFlow:
         return data
 
     def cancel(self, identifier):
-        # This endpoint cancels an unpaid charge; it never marks a TX paid.
-        return self.request(
-            "PUT",
-            "/transactions/" + transaction_id(identifier),
-            payload={"status": "cancelled"},
-        )
+        return self.request('DELETE','/transactions/'+transaction_id(identifier))
 
     def find(self, order):
         # The order-specific documented callback is the correlation identifier

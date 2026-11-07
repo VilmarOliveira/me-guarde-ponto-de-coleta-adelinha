@@ -167,7 +167,7 @@ def install_google_login(app, db, login_blocked, record_login):
         matches = db().execute('SELECT * FROM clients WHERE LOWER(TRIM(email))=? LIMIT 2', (email,)).fetchall()
         if not matches:
             session['google_registration_required'] = True
-            return redirect(url_for('index',_anchor='cadastro'))
+            return redirect(url_for('registration_page'))
         if len(matches)!=1: return fail('Mais de um cadastro utiliza este e-mail. Procure a equipe para regularizar o cadastro antes de vincular o Google.')
         client = matches[0]
         problem = check_eligibility(client)

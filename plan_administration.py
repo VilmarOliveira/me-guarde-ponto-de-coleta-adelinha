@@ -338,12 +338,17 @@ def cancel(db, app, order_id, actor, reason, operation_id, value, settings):
             or order["state"] in ("failed", "declined")
             or (order["state"] == "creating" and order["creation_started_at"] == "")
         )
-    state = "admin_cancelled" if closed else "cancel_requested"
+    state = (
+        ("expired" if data and data.get("status") == "expired" else "admin_cancelled")
+        if closed
+        else order["state"]
+    )
     db.execute(
-        "UPDATE plan_orders SET state=?,cancel_state=?,qr_text=NULL,error_code=?,check_after=NULL WHERE id=?",
+        "UPDATE plan_orders SET state=?,cancel_state=?,qr_text=CASE WHEN ? THEN NULL ELSE qr_text END,error_code=?,check_after=NULL WHERE id=?",
         (
             state,
             "closed" if closed else "external_pending",
+            int(closed),
             None if closed else "cancel_awaiting_verification",
             order_id,
         ),
@@ -388,7 +393,7 @@ def create_fast(
         raise ValueError("Regularize o cadastro e o contrato antes da contratação.")
     if order:
         if order["method"] != "pix" or order["state"] not in service.OPEN_STATES:
-            raise ValueError("Este pedido não permite nova cobrança FastFlow.")
+            raise ValueError("Este pedido não permite nova cobrança Fast.")
         item = order
         mode = None
     else:

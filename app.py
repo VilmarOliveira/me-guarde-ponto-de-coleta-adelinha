@@ -308,7 +308,7 @@ def create_app(test_config=None):
     def protect_session_pages(response):
         # A página inicial muda conforme a sessão; dados autenticados nunca devem
         # ser reaproveitados por caches compartilhados da Oracle ou do navegador.
-        if request.endpoint in {"index", "terms", "current_contract_pdf", "client_login", "client_login_post", "privacy"} or (request.endpoint or "").startswith("google_login.") or ((session.get("staff") or session.get("client_id")) and request.endpoint not in {"header_identity", "main_service_banner", "explanatory_card_image"}):
+        if request.endpoint in {"index", "registration_page", "register", "terms", "current_contract_pdf", "client_login", "client_login_post", "privacy"} or (request.endpoint or "").startswith("google_login.") or ((session.get("staff") or session.get("client_id")) and request.endpoint not in {"header_identity", "main_service_banner", "explanatory_card_image"}):
             response.headers["Cache-Control"] = "private, no-store, max-age=0"
             response.headers["Vary"] = "Cookie"
         if (request.endpoint or "").startswith("google_login."):
@@ -336,6 +336,10 @@ def create_app(test_config=None):
                 "explanatory_cards": db().execute("SELECT id,title,alt_text,revision,width,height FROM explanatory_cards ORDER BY id").fetchall(),
                 "original_logo_available": ORIGINAL_LOGO.is_file(), "header_customized": bool(setting and setting["header_customized"]), "staff_account": staff,
                 "staff_legacy": session.get("staff_legacy")}
+
+    @app.template_filter('provider_label')
+    def provider_label(value):
+        return str(value).replace('FastFlow','Fast')
 
     @app.template_filter("local_datetime")
     def local_datetime(value):
@@ -447,6 +451,10 @@ def create_app(test_config=None):
         show_registration = not (session.get("client_id") or session.get("staff")) or bool(session.get("staff") and request.args.get("cadastro") == "1")
         return render_template("index.html", banners=banners, photos=photos, show_registration=show_registration)
 
+    @app.get('/cadastro')
+    def registration_page():
+        return render_template('registration.html',registration_form={})
+
     @app.get("/identidade/banner-principal")
     def main_service_banner():
         setting = db().execute(
@@ -513,7 +521,7 @@ def create_app(test_config=None):
     @login_required
     def settings_hub():
         staff = current_staff()
-        if session.get("staff_user_id") and not (staff and (staff["can_settings"] or staff["can_users"])):
+        if session.get("staff_user_id") and not (staff and any(staff[key] for key in ('can_settings','can_users','can_packages','can_pickups','can_clients'))):
             abort(403)
         return render_template("settings_hub.html")
 
@@ -999,7 +1007,7 @@ def create_app(test_config=None):
         version,label,text = current_contract()
         if not presented_contract_matches((version,label,text)):
             flash('O contrato foi atualizado. Leia a versão vigente e solicite um novo código antes de aceitar.', 'error')
-            return render_template('index.html', registration_form={**request.form}), 409
+            return render_template('registration.html', registration_form={**request.form}), 409
         name = request.form.get("name", "").strip()
         cpf = digits(request.form.get("cpf", ""))
         phone = digits(request.form.get("phone", ""))
@@ -1019,21 +1027,21 @@ def create_app(test_config=None):
                 confirmation["attempts"] = confirmation.get("attempts", 0) + 1
                 session["registration_confirmation"] = confirmation
             flash("Confirme o código enviado ao e-mail antes de concluir.", "error")
-            return render_template("index.html", registration_form={**request.form}), 400
+            return render_template("registration.html", registration_form={**request.form}), 400
         if request.form.get("terms_accept") != "yes":
             flash("É necessário aceitar as condições do serviço.", "error")
-            return redirect(url_for("index") + "#cadastro")
+            return redirect(url_for("registration_page"))
         form = {"name": name, "cpf": request.form.get("cpf", ""), "phone": request.form.get("phone", ""), "email": email, **residential}
         if not valid_cpf(cpf):
             flash("CPF inválido. Confira os números digitados.", "error")
-            return render_template("index.html", registration_form=form), 400
+            return render_template("registration.html", registration_form=form), 400
         if len(name) < 5 or len(phone) < 10 or not email or not valid_email(email) or not signature.startswith("data:image/png;base64,") or len(password) < 8 or password != request.form.get("password_confirm") or not valid_residential_address(residential):
             flash("Confira os dados, o e-mail, o endereço residencial obrigatório, a assinatura e as senhas (mínimo de 8 caracteres).", "error")
-            return render_template("index.html", registration_form=form), 400
+            return render_template("registration.html", registration_form=form), 400
         accepted_at = now().isoformat()
         if db().execute("SELECT 1 FROM clients WHERE REPLACE(REPLACE(REPLACE(cpf,'.',''),'-',''),' ','')=?", (cpf,)).fetchone():
             flash("Este CPF já possui cadastro.", "error")
-            return render_template("index.html", registration_form=form), 409
+            return render_template("registration.html", registration_form=form), 409
         public_id = next_public_code(db(), "CLIPCA")
         cur = db().execute(
             """INSERT INTO clients(public_id,name, cpf, phone, terms_version, terms_text, signature, accepted_at, password_hash,

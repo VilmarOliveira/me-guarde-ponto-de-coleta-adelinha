@@ -205,7 +205,8 @@ def test_navigation_separates_public_and_internal_and_permissions(payments):
         .text.split('<nav id="main-nav"', 1)[1]
         .split("</nav>", 1)[0]
     )
-    assert "Gerenciar blog" in panel and "Dúvidas" not in panel
+    assert "Gerenciar blog" not in panel and "Dúvidas" not in panel
+    assert "Gerenciar blog" in client.get("/painel/configuracoes").text
     guest = app.test_client()
     public = guest.get("/").text
     assert (

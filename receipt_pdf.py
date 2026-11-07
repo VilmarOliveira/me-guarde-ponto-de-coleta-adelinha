@@ -161,7 +161,7 @@ def build_receipt_pdf(withdrawal, packages, address):
     if _value(withdrawal,"prepaid_amount"):
         fields += (("Pago antecipadamente neste pacote",_display(_value(withdrawal,"prepaid_amount"),True)),)
     if _value(withdrawal,"external_transaction_id"):
-        fields += (("Transação FastFlow",str(_value(withdrawal,"external_transaction_id"))),)
+        fields += (("Transação Fast",str(_value(withdrawal,"external_transaction_id"))),)
     if _value(withdrawal, "payment_method") in ("Pix","Pix AI"):
         fields += (
             ("Titular Pix registrado", _display(_value(withdrawal, "pix_receiver_snapshot"))),

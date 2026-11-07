@@ -224,3 +224,12 @@ PYTHONPATH=/tmp/adelinha-browser-py .venv/bin/python tests/browser/payment_order
 ```
 
 Fixture isolada em `127.0.0.1:5089`. Verifica sete larguras, margens das abas, leitura dos valores completos, arraste de mouse, controles por teclado e toque, interruptores e ordem persistida nas três abas sem alterações cruzadas. Sem cobranças reais.
+
+## Perfis, mensalidade e navegação
+
+```bash
+PYTHONPATH=/tmp/adelinha-browser-py .venv/bin/python tests/browser/site_roles_monthly_price.py
+PYTHONPATH=/tmp/adelinha-browser-py .venv/bin/python tests/browser/payment_order_layout.py
+```
+
+O primeiro cenário usa `127.0.0.1:5091`, dados fictícios e login de visitante/cliente/funcionário/administrador; verifica recebimento, retirada, pendência longa e preço novo sem alteração de cobranças emitidas. O segundo também cobre a alça por mouse, toque e setas do teclado. Nenhuma cobrança real.

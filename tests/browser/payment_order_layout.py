@@ -160,6 +160,7 @@ with sync_playwright() as p:
             == "rgb(21, 128, 61)"
         )
     page.locator("[name=max_0]").fill("500.00")
+    assert page.locator("[data-move]").count() == 0
     ai = page.locator('[data-method="Pix AI"]')
     fast = page.locator('[data-method="Pix Fast"]')
     ai.locator(".payment-grip").drag_to(fast)
@@ -169,11 +170,11 @@ with sync_playwright() as p:
         and page.locator("[name=max_0]").input_value() == "500.00"
     )
     page.get_by_role("switch", name="Ativar Pix Fast", exact=True).uncheck()
-    up = page.get_by_role("button", name="Subir Dinheiro", exact=True)
+    up = page.locator('[data-method="Dinheiro"] .payment-grip')
     up.focus()
-    page.keyboard.press("Enter")
+    page.keyboard.press("ArrowUp")
     up.focus()
-    page.keyboard.press("Enter")
+    page.keyboard.press("ArrowUp")
     assert methods() == ["Dinheiro", "Pix AI", "Pix Fast"]
     assert page.locator("[name=priority_2]").input_value() == "1"
     page.get_by_role("button", name="Salvar alterações", exact=True).click()
@@ -189,7 +190,8 @@ with sync_playwright() as p:
         methods() == ["Pix Fast", "Pix AI", "Dinheiro"]
         and page.locator("[name=max_0]").input_value() == "1000.00"
     )
-    page.get_by_role("button", name="Subir Pix AI", exact=True).click()
+    page.locator('[data-method="Pix AI"] .payment-grip').focus()
+    page.keyboard.press("ArrowUp")
     page.get_by_role("button", name="Salvar alterações", exact=True).click()
     page.reload()
     assert methods() == ["Pix AI", "Pix Fast", "Dinheiro"]
@@ -205,12 +207,40 @@ with sync_playwright() as p:
     phone.on("pageerror", lambda e: errors.append(str(e)))
     phone.goto(origin + "/painel/configuracoes/pagamentos-cliente?aba=renewal")
     phone.wait_for_load_state("networkidle")
-    phone.get_by_role("button", name="Subir Dinheiro", exact=True).tap()
+    handle = phone.locator('[data-method="Dinheiro"] .payment-grip')
+    handle.scroll_into_view_if_needed()
+    box = handle.bounding_box()
+    target = phone.locator('[data-method="Pix AI"]').bounding_box()
+    phone.evaluate("window.pointerTrace=[];['pointerdown','pointermove','pointerup','pointercancel'].forEach(type=>document.addEventListener(type,e=>window.pointerTrace.push([type,e.clientX,e.clientY,e.pointerType,e.target.closest('[data-payment-row]')?.dataset.method])))")
+    cdp = touch.new_cdp_session(phone)
+    cdp.send(
+        "Input.dispatchTouchEvent",
+        {
+            "type": "touchStart",
+            "touchPoints": [
+                {"x": box["x"] + box["width"] / 2, "y": box["y"] + box["height"] / 2}
+            ],
+        },
+    )
+    cdp.send(
+        "Input.dispatchTouchEvent",
+        {
+            "type": "touchMove",
+            "touchPoints": [
+                {
+                    "x": box["x"] + box["width"] / 2,
+                    "y": target["y"] + target["height"] - 8,
+                }
+            ],
+        },
+    )
+    phone.wait_for_timeout(100)
+    cdp.send("Input.dispatchTouchEvent", {"type": "touchEnd", "touchPoints": []})
     phone.get_by_role("button", name="Salvar alterações", exact=True).tap()
     phone.reload()
     assert phone.locator("[data-payment-row]").evaluate_all(
         "rows=>rows.map(r=>r.dataset.method)"
-    ) == ["Pix Fast", "Dinheiro", "Pix AI"]
+    ) == ["Pix Fast", "Dinheiro", "Pix AI"], (phone.evaluate('window.pointerTrace'),box,target,errors)
     assert phone.evaluate("document.documentElement.scrollWidth<=innerWidth")
     phone.get_by_role("link", name="Pagamento antecipado", exact=True).tap()
     assert (

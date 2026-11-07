@@ -143,10 +143,13 @@ def reminders(db, config, value, send_email):
             )
             db.commit()
             continue
+        import plan_pricing
+
+        renewal_price = plan_pricing.money(plan_pricing.current(db))
         date = end.strftime("%d/%m/%Y às %H:%M")
         link = origin + "/cliente/plano"
-        body = f"Olá, {row['name']}!\n\nSeu Plano ME GUARDE Mais vence em {date} (America/Sao_Paulo).\nRenovação: R$ 33,90 por ciclo mensal, com 10 créditos.\n\nRenovar meu plano: {link}\n\nSem débito automático. Excedentes e atraso são cobrados separadamente.\n\nPONTO DE COLETA ADELINHA\nME GUARDE — COMPROU? DEIXA COM A GENTE."
-        html = f'<div style="font-family:Arial,sans-serif;max-width:600px;margin:auto;color:#292929;line-height:1.6"><h1>Plano ME GUARDE Mais</h1><p>Olá, {escape(row["name"])}!</p><p>Vencimento: <b>{date}</b> (America/Sao_Paulo).</p><p>Renovação: <b>R$ 33,90</b> por ciclo mensal, com 10 créditos.</p><p><a style="display:inline-block;padding:14px 22px;background:#e34a00;color:white;border-radius:12px" href="{escape(link,quote=True)}">Renovar meu plano</a></p><p>Sem débito automático. Excedentes e atraso são cobrados separadamente.</p><p>PONTO DE COLETA ADELINHA<br>ME GUARDE — COMPROU? DEIXA COM A GENTE.</p></div>'
+        body = f"Olá, {row['name']}!\n\nSeu Plano ME GUARDE Mais vence em {date} (America/Sao_Paulo).\nRenovação: R$ {renewal_price} por ciclo mensal, com 10 créditos.\n\nRenovar meu plano: {link}\n\nSem débito automático. Excedentes e atraso são cobrados separadamente.\n\nPONTO DE COLETA ADELINHA\nME GUARDE — COMPROU? DEIXA COM A GENTE."
+        html = f'<div style="font-family:Arial,sans-serif;max-width:600px;margin:auto;color:#292929;line-height:1.6"><h1>Plano ME GUARDE Mais</h1><p>Olá, {escape(row["name"])}!</p><p>Vencimento: <b>{date}</b> (America/Sao_Paulo).</p><p>Renovação: <b>R$ {renewal_price}</b> por ciclo mensal, com 10 créditos.</p><p><a style="display:inline-block;padding:14px 22px;background:#e34a00;color:white;border-radius:12px" href="{escape(link,quote=True)}">Renovar meu plano</a></p><p>Sem débito automático. Excedentes e atraso são cobrados separadamente.</p><p>PONTO DE COLETA ADELINHA<br>ME GUARDE — COMPROU? DEIXA COM A GENTE.</p></div>'
         try:
             ok, _ = send_email(
                 row["email"], "Renove seu Plano ME GUARDE Mais", body, html_body=html

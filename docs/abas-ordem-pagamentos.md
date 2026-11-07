@@ -4,7 +4,7 @@ As abas da Área do Ponto usam largura pelo ícone/texto, altura uniforme e queb
 
 Em **Pagamentos → Ordem e limites**, a tabela Ordem de exibição mantém Ordem, Forma de pagamento, Mínimo, Máximo e Ativo. Valores são alinhados à direita; os interruptores ficam centralizados no computador e verdes quando ativos. Até 800 px, as linhas tornam-se blocos rotulados; até 430 px, os valores usam uma coluna para manter R$ 100.000,00 legível.
 
-Arraste pelos seis pontinhos ou use **Subir** e **Descer**, inclusive por teclado e toque. A numeração é atualizada ao mover; somente **Salvar alterações** grava. O foco e uma mensagem acessível acompanham a mudança. Sem JavaScript, o seletor de prioridade continua disponível.
+Arraste pelos seis pontinhos com mouse ou toque; com a alça em foco, use **↑** e **↓**. Os botões Subir/Descer foram removidos. A numeração é atualizada ao mover; somente **Salvar alterações** grava. O foco e uma mensagem acessível acompanham a mudança. Sem JavaScript, o seletor de prioridade continua disponível.
 
 Pagamento antecipado, Contratação e Renovação continuam independentes. Limites, ativação, título do botão e instruções mantêm os mesmos nomes de campos e validações do servidor. Reordenar move elementos existentes, preservando valores e interruptores. A primeira opção ativa e elegível continua sendo escolhida pela lógica existente; cobranças pendentes não são modificadas.
 

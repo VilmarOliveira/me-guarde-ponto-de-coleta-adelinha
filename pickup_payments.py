@@ -107,6 +107,7 @@ def schema(db, id_type, ensure):
         },
     )
     ensure(db, "plan_orders", {"policy_snapshot": "TEXT"})
+    ensure(db,"settings",{"monthly_price_cents":"INTEGER NOT NULL DEFAULT 3390"})
     ensure(db, "pickup_packages", {"prepaid_amount": "REAL"})
     db.execute("""CREATE TABLE IF NOT EXISTS package_prepayments (
         order_id TEXT NOT NULL REFERENCES pickup_payment_orders(id),

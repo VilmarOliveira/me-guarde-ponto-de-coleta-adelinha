@@ -1,11 +1,12 @@
 """Explicit administrator decisions, separate from provider payment evidence."""
 
 import re
+import plan_pricing as pricing
 import uuid
 import plan_service as service
 from client_compliance import compliance
 import client_actions
-from fastflow_gateway import AMOUNT_CENTS, GatewayError
+from fastflow_gateway import GatewayError
 
 APPROVABLE = (
     "creating",
@@ -171,6 +172,7 @@ def approve(
         ).fetchone()
         if not row:
             oid = str(uuid.uuid4())
+            charge_price = pricing.current(db)
             # An administrative grant is not a customer click, contract signature
             # or confirmed payment. Keep accepted_at empty and the origin distinct.
             db.execute(
@@ -179,14 +181,14 @@ def approve(
                 (
                     oid,
                     client_id,
-                    AMOUNT_CENTS,
+                    charge_price,
                     key,
                     current["id"] if current else None,
                     service.iso(value),
                     re.sub(r"\D", "", person["cpf"]),
                     settings.callback(oid),
-                    service.PLAN_RULES_VERSION,
-                    service.PLAN_RULES,
+                    service.offered_version(db, charge_price),
+                    service.offered_rules(db, charge_price),
                 ),
             )
             row = db.execute("SELECT * FROM plan_orders WHERE id=?", (oid,)).fetchone()
@@ -231,7 +233,7 @@ def approve(
     record(db, order, "approve", actor, reason, operation_id, value, "manual_approved")
     db.execute(
         "UPDATE plan_admin_decisions SET payment_method=?,amount_cents=?,result=? WHERE id=?",
-        (payment_method, AMOUNT_CENTS, "manually_confirmed", operation_id),
+        (payment_method, order["amount_cents"], "manually_confirmed", operation_id),
     )
     db.commit()
     return order["id"]
@@ -412,7 +414,7 @@ def create_fast(
         record(db, item, "charge", actor, reason, operation_id, value, item["state"])
         db.execute(
             "UPDATE plan_admin_decisions SET payment_method='Pix Fast',amount_cents=?,result='pending' WHERE id=?",
-            (AMOUNT_CENTS, operation_id),
+            (item["amount_cents"], operation_id),
         )
     db.commit()
     import plan_charge

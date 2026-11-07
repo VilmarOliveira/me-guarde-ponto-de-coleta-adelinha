@@ -83,10 +83,10 @@ class Settings:
         return self.origin + "/webhooks/fastflow/pedidos/" + order_id
 
 
-def money_matches(value):
+def money_matches(value, expected_cents=AMOUNT_CENTS):
     try:
         amount = Decimal(str(value))
-        return amount.is_finite() and amount * 100 == AMOUNT_CENTS
+        return amount.is_finite() and amount * 100 == expected_cents
     except (InvalidOperation, ValueError, TypeError):
         return False
 

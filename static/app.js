@@ -388,6 +388,7 @@ async function updatePayment() {
     document.querySelector('#payment-confirmation-text').textContent=data.pix_zero_total?'Total zero: confiro a entrega sem cobrança.':'A entrega será confirmada na tela do Pix Fast após o pagamento.';
     submitPickup.disabled=!data.pix_zero_total;
     document.querySelector('#generate-pickup-fast').disabled=data.pix_zero_total||outside;
+    document.querySelector('#generate-pickup-advance').disabled=data.pix_zero_total||outside;
     document.querySelector('#pickup-fast-info').textContent=data.pix_zero_total?'Total zero: confirme a retirada sem gerar cobrança.':'Pagamento deve ser confirmado pela API antes da entrega.';
   }
   if (method === 'Pix AI') {
@@ -405,16 +406,18 @@ async function updatePayment() {
     }
   }
 }
-document.querySelector('#generate-pickup-fast')?.addEventListener('click',async(event)=>{
+async function generatePickupPayment(event){
   const button=event.currentTarget;button.disabled=true;
   const old=document.querySelector('#existing-pickup-fast');if(old&&!old.hidden){location.assign(old.href);return;}
   const body=new FormData(pickupForm);body.delete('package_ids');
   document.querySelectorAll('[name="package_ids"]:checked').forEach(e=>body.append('package_ids',e.value));
-  try{const response=await fetch('/painel/retirada/pix-fast',{method:'POST',body});const data=await response.json();
-    if(!response.ok){alert(data.error);return;}location.assign(data.url);
+  try{const response=await fetch(button.id==='generate-pickup-advance'?'/painel/retirada/antecipar':'/painel/retirada/pix-fast',{method:'POST',body});const data=await response.json();
+    if(!response.ok){alert(data.error);return;}if(button.id==='generate-pickup-advance'){try{sessionStorage.removeItem('adelinha-pickup-draft');}catch(_){}}location.assign(data.url);
   }catch(_){alert('Criação em consulta. Consulte a solicitação existente antes de tentar novamente.');}
   finally{button.disabled=false;}
-});
+}
+document.querySelector('#generate-pickup-fast')?.addEventListener('click',generatePickupPayment);
+document.querySelector('#generate-pickup-advance')?.addEventListener('click',generatePickupPayment);
 document.querySelectorAll('[name="package_ids"], [name="payment_method"]').forEach((input) => input.addEventListener('change', updatePayment));
 let discountTimer;
 [[discountAmount, discountPercent], [discountPercent, discountAmount]].forEach(([field, other]) => {

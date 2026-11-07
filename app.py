@@ -2,6 +2,7 @@ import plan_service
 import plan_routes
 import pickup_payments
 import customer_area
+import metrics_charts
 import payment_policies
 import pickup_history as pickup_history_data
 import os
@@ -484,6 +485,7 @@ def create_app(test_config=None):
                 abort(400, "Período inválido")
         else:
             end = now() + timedelta(seconds=1)
+        if start>=end:abort(400,'Período inválido')
         start_iso, end_iso = start.isoformat(), end.isoformat()
         visits = db().execute("SELECT COUNT(id) visits,COUNT(DISTINCT visitor_id) visitors,MIN(created_at) first_at FROM analytics_events WHERE event_type='pageview' AND created_at>=? AND created_at<?", (start_iso,end_iso)).fetchone()
         pages = db().execute("SELECT path,COUNT(id) total FROM analytics_events WHERE event_type='pageview' AND created_at>=? AND created_at<? GROUP BY path ORDER BY total DESC LIMIT 10", (start_iso,end_iso)).fetchall()
@@ -500,8 +502,12 @@ def create_app(test_config=None):
         notified=db().execute("SELECT notified_at FROM packages WHERE status='aguardando_retirada' AND notified_at IS NOT NULL").fetchall()
         operational["late"]=sum(1 for item in notified if (now().date()-datetime.fromisoformat(item["notified_at"]).astimezone(TZ).date()).days+1 >= 5)
         money = db().execute("SELECT COALESCE(SUM(final_total),0) received,COALESCE(SUM(discount_amount),0) discounts,COALESCE(SUM(surcharge_amount),0) surcharges,COALESCE(SUM(CASE WHEN payment_method='Pix' THEN final_total ELSE 0 END),0) pix,COALESCE(SUM(CASE WHEN payment_method='Dinheiro' THEN final_total ELSE 0 END),0) cash FROM pickups WHERE picked_at>=? AND picked_at<?",(start_iso,end_iso)).fetchone()
-        return render_template("metrics.html", visits=visits, pages=pages, devices=devices, origins=origins, clicks=clicks,
-            operational=operational, money=money, period=period, start=start.date(), end=(end-timedelta(days=1)).date())
+        graph='pie' if request.args.get('graph')=='pie' else 'bar'
+        events=db().execute("SELECT created_at FROM analytics_events WHERE event_type='pageview' AND created_at>=? AND created_at<?",(start_iso,end_iso)).fetchall()
+        chart=metrics_charts.build(events,devices,monthly=(end-start).days>62)
+        chart_links={kind:url_for('metrics_dashboard',**{**request.args.to_dict(),'graph':kind}) for kind in ('bar','pie')}
+        return render_template("metrics.html", graph=graph,chart=chart,chart_links=chart_links, visits=visits, pages=pages, devices=devices, origins=origins, clicks=clicks,
+            operational=operational, money=money, period=period, start=start.date(), end=(end-timedelta(microseconds=1)).date())
 
     @app.get("/painel/configuracoes")
     @login_required

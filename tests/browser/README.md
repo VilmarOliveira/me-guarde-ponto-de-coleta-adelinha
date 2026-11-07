@@ -208,3 +208,11 @@ PYTHONPATH=/tmp/adelinha-browser-py .venv/bin/python tests/browser/payment_polic
 ```
 
 Fixture isolada em `127.0.0.1:5083`, sem chamadas financeiras reais. Confere comparativo, duas últimas retiradas, Hoje e todos os filtros, três abas independentes e prévia sem cobrança, em sete larguras. Relatório/capturas ficam na pasta temporária informada.
+
+## Configurações unificadas e gráficos
+
+```bash
+PYTHONPATH=/tmp/adelinha-browser-py .venv/bin/python tests/browser/settings_navigation_charts.py
+```
+
+Servidor isolado em `127.0.0.1:5085`. Confere cartões 4/2/1, geometria e foco, abas e salvamento, tipos de gráfico e manutenção de período, usando dados fictícios e sete larguras. Resultados e capturas na pasta temporária informada.

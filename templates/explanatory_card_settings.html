@@ -1,6 +1,6 @@
 {% extends 'base.html' %}{% from 'icons.html' import icon %}{% from 'image_upload.html' import image_upload with context %}
 {% block title %}Cartões explicativos · Configurações{% endblock %}
-{% block content %}<section class="panel-card"><span class="eyebrow">CONFIGURAÇÕES</span><h1>Cartões explicativos</h1><p>Edite os quatro cartões da página inicial. As alterações são publicadas ao salvar. Outras proporções são aceitas; a imagem será exibida completa.</p>
+{% block content %}{% with settings_section='identity' %}{% include 'settings_section_tabs.html' %}{% endwith %}<section class="panel-card"><span class="eyebrow">CONFIGURAÇÕES</span><h1>Cartões explicativos</h1><p>Edite os quatro cartões da página inicial. As alterações são publicadas ao salvar. Outras proporções são aceitas; a imagem será exibida completa.</p>
 <div class="explanatory-admin-grid">{% for card in explanatory_cards %}
 <article class="package"><h2>Cartão {{ card.id }}</h2><form method="post" enctype="multipart/form-data">
 <input type="hidden" name="card_id" value="{{ card.id }}">

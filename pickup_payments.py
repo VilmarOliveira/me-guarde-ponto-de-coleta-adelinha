@@ -95,10 +95,51 @@ def schema(db, id_type, ensure):
         """CREATE TABLE IF NOT EXISTS pickup_payment_reservations (
         package_id BIGINT PRIMARY KEY REFERENCES packages(id),order_id TEXT NOT NULL REFERENCES pickup_payment_orders(id))"""
     )
+    ensure(db, "pickup_payment_orders", {"advance": "INTEGER NOT NULL DEFAULT 0"})
+    ensure(db, "pickup_packages", {"prepaid_amount": "REAL"})
+    db.execute("""CREATE TABLE IF NOT EXISTS package_prepayments (
+        order_id TEXT NOT NULL REFERENCES pickup_payment_orders(id),
+        package_id BIGINT NOT NULL REFERENCES packages(id), paid_cents INTEGER NOT NULL,
+        settled_cents INTEGER NOT NULL, recorded_at TEXT NOT NULL,
+        PRIMARY KEY(order_id,package_id))""")
+    db.execute(
+        "CREATE INDEX IF NOT EXISTS package_prepayments_package ON package_prepayments(package_id)"
+    )
     db.execute(f"""CREATE TABLE IF NOT EXISTS pickup_payment_events (
         id {id_type},order_id TEXT NOT NULL REFERENCES pickup_payment_orders(id),transaction_id TEXT NOT NULL,
         event_key TEXT NOT NULL UNIQUE,event_type TEXT NOT NULL,received_at TEXT NOT NULL,
         processed_at TEXT,outcome TEXT NOT NULL,reason TEXT)""")
+
+
+def prepaid(db, package_id):
+    row = db.execute(
+        "SELECT COALESCE(SUM(paid_cents),0) paid,COALESCE(SUM(settled_cents),0) settled FROM package_prepayments WHERE package_id=?",
+        (package_id,),
+    ).fetchone()
+    return row["paid"] / 100, row["settled"] / 100
+
+
+def settle_advance(db, order, value):
+    snap = json.loads(order["snapshot"])
+    items = snap["packages"]
+    weights = [max(0, round(p["total"] * 100)) for p in items]
+    if not sum(weights):
+        weights = [1] * len(items)
+    total = sum(weights)
+    portions = [order["amount_cents"] * w // total for w in weights]
+    remaining = order["amount_cents"] - sum(portions)
+    for i in sorted(
+        range(len(items)), key=lambda i: -(order["amount_cents"] * weights[i] % total)
+    )[:remaining]:
+        portions[i] += 1
+    for p, amount in zip(items, portions):
+        db.execute(
+            "INSERT INTO package_prepayments(order_id,package_id,paid_cents,settled_cents,recorded_at) VALUES(?,?,?,?,?) ON CONFLICT DO NOTHING",
+            (order["id"], p["id"], amount, round(p["total"] * 100), ps.iso(value)),
+        )
+    db.execute(
+        "DELETE FROM pickup_payment_reservations WHERE order_id=?", (order["id"],)
+    )
 
 
 def quote(packages, form, fees):
@@ -197,6 +238,11 @@ def apply(db, oid, data, value):
         raise GatewayError(code="unknown_status")
     db.commit()
     db.begin_write()
+    db.execute(
+        "SELECT id FROM packages WHERE id IN (SELECT package_id FROM pickup_payment_packages WHERE order_id=?) ORDER BY id"
+        + (" FOR UPDATE" if db.postgres else ""),
+        (oid,),
+    ).fetchall()
     order = db.execute(
         "SELECT * FROM pickup_payment_orders WHERE id=?"
         + (" FOR UPDATE" if db.postgres else ""),
@@ -265,6 +311,11 @@ def apply(db, oid, data, value):
             db.execute(
                 "DELETE FROM pickup_payment_reservations WHERE order_id=?", (oid,)
             )
+    current = db.execute(
+        "SELECT * FROM pickup_payment_orders WHERE id=?", (oid,)
+    ).fetchone()
+    if current["advance"] and current["state"] == "paid" and not current["error_code"]:
+        settle_advance(db, current, value)
     db.commit()
 
 
@@ -358,6 +409,15 @@ def webhook(db, app, rid, tid, event, raw, value):
 
 def assert_unreserved(db, ids, allowed=None):
     marks = ",".join("?" for _ in ids)
+    if db.execute(
+        "SELECT 1 FROM package_prepayments a JOIN pickup_payment_orders o ON o.id=a.order_id WHERE a.package_id IN ("
+        + marks
+        + ") AND (o.error_code IS NOT NULL OR o.state!='paid') LIMIT 1",
+        tuple(ids),
+    ).fetchone():
+        raise ValueError(
+            "Pagamento antecipado em análise. Solicite conferência ao administrador."
+        )
     row = db.execute(
         f"SELECT order_id FROM pickup_payment_reservations WHERE package_id IN ({marks})"
         + (" AND order_id!=?" if allowed else "")
@@ -370,10 +430,10 @@ def assert_unreserved(db, ids, allowed=None):
         )
 
 
-def reserve(db, packages, snapshot, actor, value, settings):
+def reserve(
+    db, packages, snapshot, actor, value, settings, advance=False, reprice=None
+):
     cents = round(snapshot["final_total"] * 100)
-    if not fast_available(snapshot["final_total"]):
-        raise ValueError(FAST_RANGE_MESSAGE)
     if len({p["client_id"] for p in packages}) != 1:
         raise ValueError(
             "Gere Pix Fast separadamente para cada cliente. Pix AI e Dinheiro mantêm a seleção conjunta."
@@ -403,12 +463,33 @@ def reserve(db, packages, snapshot, actor, value, settings):
                     (old[0]["order_id"],),
                 ).fetchone()
             )
-            if order["quote_key"] == key(snapshot):
+            same = (
+                sorted(p["id"] for p in json.loads(order["snapshot"])["packages"])
+                == ids
+            )
+            if order["quote_key"] == key(snapshot) or (
+                same and (advance or order["advance"])
+            ):
+                if advance and not order["advance"]:
+                    db.execute(
+                        "UPDATE pickup_payment_orders SET advance=1 WHERE id=?",
+                        (order["id"],),
+                    )
+                    order["advance"] = 1
+                if advance and order["state"] == "paid" and not order["error_code"]:
+                    settle_advance(db, order, value)
                 db.commit()
                 return order, False
         raise ValueError(
             "Pacotes já vinculados a outra cobrança. Mantenha os valores e a modalidade até a conclusão ou cancelamento."
         )
+    if reprice:
+        snapshot = reprice(locked)
+        cents = round(snapshot["final_total"] * 100)
+        if not fast_available(snapshot["final_total"]):
+            raise ValueError(FAST_RANGE_MESSAGE)
+    if not fast_available(snapshot["final_total"]):
+        raise ValueError(FAST_RANGE_MESSAGE)
     db.execute(
         "SELECT id FROM plan_gateway_lock WHERE id=1"
         + (" FOR UPDATE" if db.postgres else "")
@@ -443,6 +524,9 @@ def reserve(db, packages, snapshot, actor, value, settings):
             key(snapshot),
             actor,
         ),
+    )
+    db.execute(
+        "UPDATE pickup_payment_orders SET advance=? WHERE id=?", (int(advance), oid)
     )
     for pid in ids:
         db.execute(
@@ -538,7 +622,9 @@ def reconcile(db, app, value):
         refresh(db, app, row["id"], value)
 
 
-def install(app, db, staff_required, current_staff, now, fees, qr_data):
+def install(
+    app, db, staff_required, current_staff, now, fees, qr_data, client_required
+):
     bp = Blueprint("pickup_payments", __name__)
 
     def permission():
@@ -560,6 +646,9 @@ def install(app, db, staff_required, current_staff, now, fees, qr_data):
     @staff_required
     def create():
         permission()
+        return create_charge()
+
+    def create_charge(client_id=None, advance=False):
         try:
             ids = sorted(set(int(x) for x in request.form.getlist("package_ids")))
             if not ids or len(ids) > 150:
@@ -576,7 +665,10 @@ def install(app, db, staff_required, current_staff, now, fees, qr_data):
             )
             if len(rows) != len(ids):
                 raise ValueError("Pacote não encontrado.")
-            snapshot = quote(rows, request.form, fees)
+            if client_id is not None and any(p["client_id"] != client_id for p in rows):
+                abort(404)
+            form = {} if client_id is not None else request.form
+            snapshot = quote(rows, form, fees)
             cfg = Settings.from_config(app.config)
             if not cfg.ready:
                 raise ValueError(
@@ -588,13 +680,38 @@ def install(app, db, staff_required, current_staff, now, fees, qr_data):
                 .fetchone()
             )
             snapshot["payer_document"] = re.sub(r"\D", "", owner["cpf"])
+
+            def reprice(locked):
+                fresh = {
+                    **quote(locked, form, fees),
+                    "payer_document": snapshot["payer_document"],
+                }
+                expected = (
+                    request.form.get("expected_total")
+                    if client_id is not None
+                    else None
+                )
+                if expected is not None and expected != str(
+                    round(fresh["final_total"] * 100)
+                ):
+                    raise ValueError(
+                        "O saldo mudou. Volte aos pacotes e confira o total novamente."
+                    )
+                return fresh
+
             item, new = reserve(
                 db(),
                 rows,
                 snapshot,
-                str(session.get("staff_user_id") or session.get("staff")),
+                (
+                    ("client:" + str(client_id))
+                    if client_id is not None
+                    else str(session.get("staff_user_id") or session.get("staff"))
+                ),
                 now(),
                 cfg,
+                advance=advance,
+                reprice=reprice,
             )
             if new:
                 import plan_routes
@@ -639,7 +756,14 @@ def install(app, db, staff_required, current_staff, now, fees, qr_data):
                     db().commit()
             return {
                 "id": item["id"],
-                "url": url_for("pickup_payments.payment", oid=item["id"]),
+                "url": url_for(
+                    (
+                        "pickup_payments.client_payment"
+                        if client_id is not None
+                        else "pickup_payments.payment"
+                    ),
+                    oid=item["id"],
+                ),
             }
         except (ValueError, GatewayError, DatabaseIntegrityError) as e:
             db().rollback()
@@ -650,6 +774,143 @@ def install(app, db, staff_required, current_staff, now, fees, qr_data):
                     else "A seleção mudou. Consulte os pacotes antes de gerar outra cobrança."
                 )
             }, 400
+
+    @bp.post("/painel/retirada/antecipar")
+    @staff_required
+    def staff_advance():
+        permission()
+        return create_charge(advance=True)
+
+    @bp.post("/cliente/pacotes/pagar/gerar")
+    @client_required
+    def client_create():
+        return create_charge(client_id=session["client_id"], advance=True)
+
+    def advance_label(item):
+        if item["state"] == "paid" and not item["error_code"]:
+            waiting = (
+                db()
+                .execute(
+                    "SELECT 1 FROM packages WHERE status!='retirado' AND id IN (SELECT package_id FROM pickup_payment_packages WHERE order_id=?) LIMIT 1",
+                    (item["id"],),
+                )
+                .fetchone()
+            )
+            return (
+                "Pago antecipadamente · Aguardando retirada"
+                if waiting
+                else "Pago antecipadamente · Retirada concluída"
+            )
+        return LABELS.get(item["state"], "Em consulta")
+
+    def client_order(oid):
+        item = order(oid)
+        if item["client_id"] != session["client_id"]:
+            abort(404)
+        return item
+
+    @bp.route("/cliente/pacotes/pagamentos/<oid>", methods=["GET", "POST"])
+    @client_required
+    def client_payment(oid):
+        client_order(oid)
+        refresh(db(), app, oid, now())
+        item = client_order(oid)
+        return render_template(
+            "advance_payment.html",
+            order=item,
+            snapshot=json.loads(item["snapshot"]),
+            qr=(
+                qr_data(item["qr_text"])
+                if item["qr_text"]
+                and item["state"] in ("pending", "approved", "under_review")
+                else None
+            ),
+            labels=LABELS,
+            advance_label=advance_label(item),
+        )
+
+    @bp.get("/cliente/pacotes/pagamentos/<oid>/status")
+    @client_required
+    def client_payment_status(oid):
+        client_order(oid)
+        refresh(db(), app, oid, now())
+        item = client_order(oid)
+        return {
+            "state": item["state"],
+            "label": advance_label(item),
+            "done": item["state"]
+            not in ("creating", "uncertain", "pending", "approved", "under_review"),
+        }
+
+    @bp.post("/cliente/pacotes/pagar")
+    @client_required
+    def client_review():
+        try:
+            ids = sorted(set(int(x) for x in request.form.getlist("package_ids")))
+            if not ids or len(ids) > 150:
+                raise ValueError("Selecione de 1 a 150 pacotes.")
+            rows = (
+                db()
+                .execute(
+                    "SELECT * FROM packages WHERE client_id=? AND status='aguardando_retirada' AND id IN ("
+                    + ",".join("?" for _ in ids)
+                    + ") ORDER BY id",
+                    (session["client_id"], *ids),
+                )
+                .fetchall()
+            )
+            if len(rows) != len(ids):
+                abort(404)
+            held = (
+                db()
+                .execute(
+                    "SELECT DISTINCT order_id FROM pickup_payment_reservations WHERE package_id IN ("
+                    + ",".join("?" for _ in ids)
+                    + ")",
+                    tuple(ids),
+                )
+                .fetchall()
+            )
+            if held:
+                if len(held) == 1:
+                    old = client_order(held[0]["order_id"])
+                    if (
+                        sorted(p["id"] for p in json.loads(old["snapshot"])["packages"])
+                        == ids
+                    ):
+                        db().commit()
+                        db().begin_write()
+                        db().execute(
+                            "SELECT id FROM packages WHERE id IN ("
+                            + ",".join("?" for _ in ids)
+                            + ") ORDER BY id"
+                            + (" FOR UPDATE" if db().postgres else ""),
+                            tuple(ids),
+                        ).fetchall()
+                        db().execute(
+                            "UPDATE pickup_payment_orders SET advance=1 WHERE id=?",
+                            (old["id"],),
+                        )
+                        current = order(old["id"])
+                        if current["state"] == "paid" and not current["error_code"]:
+                            settle_advance(db(), current, now())
+                        db().commit()
+                        return redirect(
+                            url_for("pickup_payments.client_payment", oid=old["id"])
+                        )
+                raise ValueError(
+                    "Pacotes já vinculados a outro Pix pendente. Consulte a cobrança existente."
+                )
+            snap = quote(rows, {}, fees)
+            return render_template(
+                "advance_review.html",
+                snapshot=snap,
+                allowed=fast_available(snap["final_total"]),
+                range_message=FAST_RANGE_MESSAGE,
+            )
+        except ValueError as error:
+            flash(str(error), "error")
+            return redirect(url_for("client_area", aba="pacotes"))
 
     @bp.get("/painel/retirada/pix-fast/<oid>")
     @staff_required

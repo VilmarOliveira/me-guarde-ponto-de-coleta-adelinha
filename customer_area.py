@@ -43,7 +43,7 @@ def context(db, client, value, fees):
     withdrawals = (
         db.execute(
             """SELECT pu.*,MIN(pp.package_id) first_package,COUNT(*) own_count,
-        SUM(pp.base_amount) own_base,SUM(pp.late_amount) own_late,SUM(CASE WHEN EXISTS(SELECT 1 FROM plan_credit_ledger l WHERE l.package_id=pp.package_id) THEN 1 ELSE 0 END) covered_count,
+        SUM(COALESCE(pp.prepaid_amount,0)) own_prepaid,SUM(pp.base_amount) own_base,SUM(pp.late_amount) own_late,SUM(CASE WHEN EXISTS(SELECT 1 FROM plan_credit_ledger l WHERE l.package_id=pp.package_id) THEN 1 ELSE 0 END) covered_count,
         (SELECT COUNT(*) FROM pickup_packages allp WHERE allp.pickup_id=pu.id) all_count
         FROM pickups pu JOIN pickup_packages pp ON pp.pickup_id=pu.id
         WHERE pp.client_id=? GROUP BY pu.id ORDER BY pu.picked_at DESC LIMIT 100""",
@@ -51,7 +51,7 @@ def context(db, client, value, fees):
         ).fetchall()
         if db.postgres
         else db.execute(
-            """SELECT pu.*,MIN(pp.package_id) first_package,COUNT(*) own_count,SUM(pp.base_amount) own_base,SUM(pp.late_amount) own_late,SUM(CASE WHEN EXISTS(SELECT 1 FROM plan_credit_ledger l WHERE l.package_id=pp.package_id) THEN 1 ELSE 0 END) covered_count,(SELECT COUNT(*) FROM pickup_packages allp WHERE allp.pickup_id=pu.id) all_count FROM pickups pu JOIN pickup_packages pp ON pp.pickup_id=pu.id WHERE pp.client_id=? GROUP BY pu.id ORDER BY pu.picked_at DESC LIMIT 100""",
+            """SELECT pu.*,MIN(pp.package_id) first_package,COUNT(*) own_count,SUM(COALESCE(pp.prepaid_amount,0)) own_prepaid,SUM(pp.base_amount) own_base,SUM(pp.late_amount) own_late,SUM(CASE WHEN EXISTS(SELECT 1 FROM plan_credit_ledger l WHERE l.package_id=pp.package_id) THEN 1 ELSE 0 END) covered_count,(SELECT COUNT(*) FROM pickup_packages allp WHERE allp.pickup_id=pu.id) all_count FROM pickups pu JOIN pickup_packages pp ON pp.pickup_id=pu.id WHERE pp.client_id=? GROUP BY pu.id ORDER BY pu.picked_at DESC LIMIT 100""",
             (client["id"],),
         ).fetchall()
     )

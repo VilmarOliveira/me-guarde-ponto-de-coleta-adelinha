@@ -155,9 +155,11 @@ def build_receipt_pdf(withdrawal, packages, address):
         ("Acréscimo manual", _display(surcharge if surcharge is not None else 0, True)),
         ("Motivo do acréscimo", _display(_value(withdrawal, "surcharge_reason")) if surcharge is None or float(surcharge) > 0 else "Não se aplica"),
         ("Desconto aplicado", _display(discount if discount is not None else 0, True)),
-        ("Total final pago", _display(final_total, True)),
+        ("Saldo pago nesta retirada" if _value(withdrawal,"prepaid_amount") else "Total final pago", _display(final_total, True)),
         ("Tipo de Pagamento", _display(_value(withdrawal, "payment_method"))),
     )
+    if _value(withdrawal,"prepaid_amount"):
+        fields += (("Pago antecipadamente neste pacote",_display(_value(withdrawal,"prepaid_amount"),True)),)
     if _value(withdrawal,"external_transaction_id"):
         fields += (("Transação FastFlow",str(_value(withdrawal,"external_transaction_id"))),)
     if _value(withdrawal, "payment_method") in ("Pix","Pix AI"):

@@ -202,6 +202,16 @@ def create_app(test_config=None):
         if connection:
             connection.close()
 
+    def fees(package, today=None):
+        total=calculate_fees(package['base_price'],package['notified_at'],package['picked_at'],today)
+        paid,settled=pickup_payments.prepaid(db(),package['id'])
+        if package['status']!='retirado':
+            base=max(0,round(total['base']-settled,2))
+            due=max(0,round(total['total']-settled,2))
+            total.update(base=base,late_fee=round(due-base,2),total=due)
+        total['prepaid']=paid
+        return total
+
     def now():
         return datetime.now(TZ)
 
@@ -1561,7 +1571,7 @@ def create_app(test_config=None):
             abort(404)
         withdrawal = db().execute(f"""SELECT {PICKUP_COLUMNS_PU},pp.package_public_id,pp.client_id snapshot_client_id,
             pp.client_name snapshot_client_name,pp.client_public_id snapshot_client_public_id,pp.tracking_code snapshot_tracking,
-            pp.package_category snapshot_category,pp.notified_at snapshot_notified_at,pp.service_amount,pp.late_days,pp.late_amount,pp.total_amount
+            pp.package_category snapshot_category,pp.notified_at snapshot_notified_at,pp.service_amount,pp.late_days,pp.late_amount,pp.total_amount,pp.prepaid_amount
             FROM pickup_packages pp JOIN pickups pu ON pu.id=pp.pickup_id WHERE pp.package_id=?""", (package_id,)).fetchone()
         pickup_packages = []
         if withdrawal:
@@ -1578,7 +1588,7 @@ def create_app(test_config=None):
             abort(404)
         withdrawal = db().execute(f"""SELECT {PICKUP_COLUMNS_PU},pp.package_public_id,pp.client_id snapshot_client_id,
             pp.client_name snapshot_client_name,pp.client_public_id snapshot_client_public_id,pp.tracking_code snapshot_tracking,
-            pp.package_category snapshot_category,pp.notified_at snapshot_notified_at,pp.service_amount,pp.late_days,pp.late_amount,pp.total_amount
+            pp.package_category snapshot_category,pp.notified_at snapshot_notified_at,pp.service_amount,pp.late_days,pp.late_amount,pp.total_amount,pp.prepaid_amount
             FROM pickup_packages pp JOIN pickups pu ON pu.id=pp.pickup_id WHERE pp.package_id=?""", (package_id,)).fetchone()
         pickup_packages = db().execute(f"SELECT {PICKUP_PACKAGE_COLUMNS} FROM pickup_packages WHERE pickup_id=? AND client_id=? ORDER BY package_id", (withdrawal["id"], session["client_id"])).fetchall() if withdrawal else []
         return render_template("package_detail.html", package=package, withdrawal=withdrawal, pickup_packages=pickup_packages, client_view=True)
@@ -1876,6 +1886,7 @@ def create_app(test_config=None):
                     pickup_id,package_id,base_amount,late_amount,package_public_id,client_id,client_name,client_public_id,
                     tracking_code,package_category,notified_at,service_amount,late_days,total_amount) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                     (pickup_id, package["id"], total["base"], total["late_fee"], package["public_id"], owner["id"], owner["name"], owner["public_id"], package["tracking"], package["category"], package["notified_at"], total["base"], total["late_days"], total["total"]))
+                connection.execute("UPDATE pickup_packages SET prepaid_amount=? WHERE pickup_id=? AND package_id=?", (pickup_payments.prepaid(connection,package["id"])[0],pickup_id,package["id"]))
                 connection.execute("UPDATE packages SET status='retirado', picked_at=? WHERE id=?", (picked_at, package["id"]))
             connection.execute('UPDATE pickups SET external_transaction_id=?,payment_order_id=?,payment_status=? WHERE id=?',(fast_order['transaction_id'] if fast_order else None,fast_order['id'] if fast_order else None,'paid_api' if fast_order else 'zero_total' if final_total==0 else 'paid_manual',pickup_id))
             if fast_order:
@@ -1917,7 +1928,7 @@ def create_app(test_config=None):
             if not person or not person['active'] or person['session_version']!=session.get('client_session_version'):abort(403)
         row = db().execute(f"""SELECT {PICKUP_COLUMNS_PU},pp.package_public_id,pp.client_id snapshot_client_id,p.client_id owner_id,
             pp.client_name snapshot_client_name,pp.client_public_id snapshot_client_public_id,pp.tracking_code snapshot_tracking,
-            pp.package_category snapshot_category,pp.notified_at snapshot_notified_at,pp.service_amount,pp.late_days,pp.late_amount,pp.total_amount
+            pp.package_category snapshot_category,pp.notified_at snapshot_notified_at,pp.service_amount,pp.late_days,pp.late_amount,pp.total_amount,pp.prepaid_amount
             FROM pickup_packages pp JOIN pickups pu ON pu.id=pp.pickup_id JOIN packages p ON p.id=pp.package_id
             WHERE pp.pickup_id=? AND pp.package_id=?""", (pickup_id, package_id)).fetchone()
         if not row:
@@ -1939,7 +1950,7 @@ def create_app(test_config=None):
     install_regularization(app, db, client_login_required, now, lambda *args: send_code(*args), residential_address_form, valid_residential_address, current_contract)
     client_actions.install(app, db, client_login_required, admin_required, current_staff, now, lambda *args: send_code(*args), lambda: (TERMS_VERSION,CONTRACT_LABEL,terms_text()))
     plan_routes.install(app, db, client_login_required, admin_required, current_staff, now, qr_code_data_url, validated_image_type)
-    pickup_payments.install(app,db,login_required,current_staff,now,fees,qr_code_data_url)
+    pickup_payments.install(app,db,login_required,current_staff,now,fees,qr_code_data_url,client_login_required)
     @app.context_processor
     def action_context():
         if not session.get('client_id'):return {}

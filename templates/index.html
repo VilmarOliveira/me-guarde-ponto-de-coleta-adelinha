@@ -4,20 +4,20 @@
 <div class="banner-carousel" data-carousel role="region" aria-roledescription="carrossel" aria-label="Banners do serviço">
 <div class="banner-slides" id="home-banner-slides" aria-live="off">
 {% for b in banners %}<figure class="banner-slide{% if loop.first %} active{% endif %}" data-slide aria-hidden="{{ 'false' if loop.first else 'true' }}" role="group" aria-roledescription="slide" aria-label="{{ loop.index }} de {{ banners|length }}">
-<img src="{{ b.src }}?v={{ (b.updated_at or 'default')|urlencode }}" alt="{{ b.alt_text }}" width="2048" height="684" decoding="async" {% if loop.first %}fetchpriority="high"{% endif %}></figure>{% endfor %}
+<img {{ 'src' if loop.first else 'data-src' }}="{{ b.src }}?largura=1280&amp;v={{ (b.updated_at or 'default')|urlencode }}" {{ 'srcset' if loop.first else 'data-srcset' }}="{% for width in [640,1280,2048] %}{{ b.src }}?largura={{ width }}&amp;v={{ (b.updated_at or 'default')|urlencode }} {{ width }}w{{ ', ' if not loop.last }}{% endfor %}" sizes="100vw" alt="{{ b.alt_text }}" width="2048" height="684" decoding="async" {% if loop.first %}fetchpriority="high" loading="eager"{% endif %}></figure>{% endfor %}
 </div>
 {% if banners|length > 1 %}<div class="banner-controls">{% for b in banners %}<button type="button" data-slide-to="{{ loop.index0 }}" aria-label="Mostrar banner {{ loop.index }}" aria-controls="home-banner-slides"{% if loop.first %} aria-current="true"{% endif %}></button>{% endfor %}</div>{% endif %}
 </div></section>{% endif %}
 
 <section class="home-section" id="como-funciona"><div class="section-head"><h2>Veja um exemplo de como é fácil usar nosso serviço</h2></div>
 <div class="explanatory-grid">{% for card in explanatory_cards %}<article>
-<h3>{{ '1. Cadastre-se no nosso site' if card.id==1 else card.id|string ~ '. ' ~ card.title }}</h3>{% if card.id==1 %}<p>Antes de fazer sua compra, crie sua conta no site do Ponto de Coleta Adelinha.</p>{% endif %}
+<h3>{{ 'Cadastre-se em nosso site' if card.id==1 else card.id|string ~ '. ' ~ card.title }}</h3>
 <a class="explanatory-open" data-card-enlarge href="{{ url_for('explanatory_card_image',card_id=card.id,variant='original',v=card.revision) }}" aria-label="Ampliar: {{ card.title }}" data-title="{{ card.title }}" data-alt="{{ card.alt_text }}">
 <picture><source media="(max-width: 47.99rem)" srcset="{{ url_for('explanatory_card_image',card_id=card.id,variant='celular',v=card.revision) }}"><img src="{{ url_for('explanatory_card_image',card_id=card.id,variant='computador',v=card.revision) }}" alt="{{ card.alt_text }}" width="{{ card.width }}" height="{{ card.height }}" loading="lazy" decoding="async"></picture>
 <span class="enlarge-desktop">Clique para ampliar</span><span class="enlarge-touch">Toque para ampliar</span></a></article>{% endfor %}</div></section>
 <section class="home-section favorite-stores"><h2>Compre nas suas lojas favoritas</h2><p>Receba suas compras no Ponto de Coleta Adelinha.</p>
 <div class="store-marquee" tabindex="0" role="region" aria-label="Exemplos de lojas onde você pode comprar"><div class="store-track">
-{% for copy in range(2) %}<ul class="store-group"{% if copy %} aria-hidden="true"{% endif %}>{% for filename,name in store_logos %}<li class="store-logo-{{ filename.split('.')[0] }}"><img src="{{ url_for('static',filename='store-logos/' ~ filename,v='1') }}" alt="{{ name if not copy else '' }}" width="160" height="72" decoding="async"></li>{% endfor %}</ul>{% endfor %}
+{% for copy in range(2) %}<ul class="store-group"{% if copy %} aria-hidden="true"{% endif %}>{% for filename,name in store_logos %}<li class="store-logo-{{ filename.split('.')[0] }}"><img src="{{ url_for('static',filename='store-logos/' ~ filename,v='1') }}" alt="{{ name if not copy else '' }}" width="160" height="72" loading="lazy" decoding="async"></li>{% endfor %}</ul>{% endfor %}
 </div></div><p><strong>E muitas outras lojas! Use nosso endereço e informe seu nome completo + ID no destinatário.</strong></p></section>
 
 <dialog class="card-lightbox" data-card-dialog aria-labelledby="card-dialog-title"><div class="card-lightbox-content"><button class="button ghost" type="button" data-card-close aria-label="Fechar imagem ampliada">Fechar ×</button><h2 id="card-dialog-title"></h2><img data-card-full alt=""><p data-card-load-error role="alert" hidden>Não foi possível carregar a imagem. Feche e tente novamente.</p></div></dialog>

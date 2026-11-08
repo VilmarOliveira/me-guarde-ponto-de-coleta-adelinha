@@ -109,7 +109,7 @@ def schema(db, id_type, ensure):
             "manual_confirmed_by": "TEXT",
         },
     )
-    ensure(db, "plan_orders", {"policy_snapshot": "TEXT"})
+    ensure(db, "plan_orders", {"policy_snapshot": "TEXT", "retry_of": "TEXT", "root_order_id": "TEXT"})
     ensure(db, "settings", {"monthly_price_cents": "INTEGER NOT NULL DEFAULT 3390"})
     for table in ("plan_orders", "pickup_payment_orders"):
         ensure(db, table, {"archived_at": "TEXT", "archived_by": "TEXT"})

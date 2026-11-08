@@ -208,6 +208,13 @@ def install(
             labels=LABELS,
             qr=qr_data(code) if code else None,
             pix_window_ended=service.fast_pix_window_ended(order, value),
+            pix_expires_at=service.safe_time(order["expires_at"]),
+            can_retry=order["local_method"] == "Pix Fast"
+            and order["state"] in ("expired", "cancelled")
+            and not order["paid_at"]
+            and not order["archived_at"]
+            and not order["error_code"]
+            and not order["cancel_state"],
             plan_rules=order["rules_text"],
             payment_choice=(
                 json.loads(order["policy_snapshot"])
@@ -429,6 +436,55 @@ def install(
         refresh(db(), app, oid, now())
         return redirect(url_for("plans.payment", oid=oid))
 
+    @bp.post("/cliente/plano/pagamentos/<oid>/novo-pix")
+    @client_required
+    def retry_payment(oid):
+        person = owner()
+        original = get_order(oid, person["id"])
+        if session.get("staff"):
+            abort(403)
+        if eligible(db(), person, now()):
+            return redirect(url_for("client_actions.hub"))
+        child = (
+            db()
+            .execute(
+                "SELECT id FROM plan_orders WHERE retry_of=? ORDER BY created_at DESC LIMIT 1",
+                (oid,),
+            )
+            .fetchone()
+        )
+        if child:
+            return redirect(url_for("plans.payment", oid=child["id"]))
+        # A browser clock or local expiry alone never authorizes a new charge.
+        verified = refresh(db(), app, oid, now(), force=True)
+        original = get_order(oid, person["id"])
+        recent = original["checked_at"] and service.parse(
+            original["checked_at"]
+        ) >= now() - timedelta(seconds=20)
+        if (
+            (not verified and not recent)
+            or original["state"] not in ("expired", "cancelled")
+            or original["error_code"]
+        ):
+            flash(
+                "Consulte novamente. Só é possível gerar outro Pix após a Fast confirmar o encerramento sem pagamento.",
+                "info",
+            )
+            return redirect(url_for("plans.payment", oid=oid))
+        order, mode = service.reserve_order(
+            db(), person, "pix", now(), settings(), retry_from=oid
+        )
+        if not order:
+            flash(mode, "error")
+            return redirect(url_for("plans.payment", oid=oid))
+        if mode == "create":
+            import plan_charge
+
+            problem = plan_charge.start(db(), app, order, person, now())
+            if problem:
+                flash(problem, "error")
+        return redirect(url_for("plans.payment", oid=order["id"]))
+
     @bp.get("/cliente/plano/pagamentos/<oid>/status")
     @client_required
     def payment_status(oid):
@@ -442,10 +498,15 @@ def install(
                 "Verificando cobrança"
                 if order["state"] in ("creating", "uncertain", "cancel_requested")
                 or order["error_code"]
-                else LABELS.get(order["state"], "Em consulta")
+                else (
+                    "QR Code vencido · Verificando cobrança"
+                    if service.fast_pix_window_ended(order, now())
+                    else LABELS.get(order["state"], "Em consulta")
+                )
             ),
             "done": order["state"] not in service.OPEN_STATES,
             "pix_available": bool(service.payment_code(order, now())),
+            "pix_expired": service.fast_pix_window_ended(order, now()),
         }
 
     @bp.post("/webhooks/fastflow/retiradas/<rid>")

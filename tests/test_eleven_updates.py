@@ -25,10 +25,10 @@ def test_home_registration_map_and_six_customer_tabs(payments):
     assert "FAZER CADASTRO AGORA" in home and 'href="/cadastro"' in home
     assert "Conheça o serviço" not in home and ">Preços e planos</a>" not in home
     assert "https://maps.app.goo.gl/5rCTnEns2EDe9RhV6" in home
-    assert "1. Cadastre-se no nosso site" in home
+    assert "Cadastre-se em nosso site" in home
     assert (
         "Antes de fazer sua compra, crie sua conta no site do Ponto de Coleta Adelinha."
-        in home
+        not in home
     )
     registration = client.get("/cadastro").text
     assert (

@@ -2,7 +2,7 @@
 <section class="home-section payment-options" id="planos-e-precos" aria-labelledby="payment-options-title">
 <h2 id="payment-options-title">Como prefere pagar?</h2>
 <h3 class="payment-section-label"><span>PLANO MENSAL</span></h3>
-<article class="monthly-offer" aria-label="Plano ME GUARDE Mais">
+<article class="monthly-offer" aria-label="Plano ME GUARDE+">
 <div class="monthly-summary">
 <img class="monthly-brand" src="{{ url_for('static', filename='brand/me-guarde-mais/logo-original.png', v='6e5ae49da703') }}" alt="ME GUARDE⁺ — Plano mensal" width="2169" height="725" loading="lazy" decoding="async">
 <div class="monthly-price"><p><strong>R$ {{ '%.2f'|format(offer.monthly_price)|replace('.',',') }}</strong><span>/mês</span></p><b class="monthly-saving">{{ icon('tag') }} ECONOMIZE ATÉ {{ offer.saving_percent }}%</b></div>

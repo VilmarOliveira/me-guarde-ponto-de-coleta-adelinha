@@ -11,7 +11,7 @@
 
 <section class="home-section" id="como-funciona"><div class="section-head"><h2>Veja um exemplo de como é fácil usar nosso serviço</h2></div>
 <div class="explanatory-grid">{% for card in explanatory_cards %}<article>
-<h3>{{ 'Cadastre-se em nosso site' if card.id==1 else card.id|string ~ '. ' ~ card.title }}</h3>
+<h3>{{ '1. Cadastre-se em nosso site' if card.id==1 else card.id|string ~ '. ' ~ card.title }}</h3>
 <a class="explanatory-open" data-card-enlarge href="{{ url_for('explanatory_card_image',card_id=card.id,variant='original',v=card.revision) }}" aria-label="Ampliar: {{ card.title }}" data-title="{{ card.title }}" data-alt="{{ card.alt_text }}">
 <picture><source media="(max-width: 47.99rem)" srcset="{{ url_for('explanatory_card_image',card_id=card.id,variant='celular',v=card.revision) }}"><img src="{{ url_for('explanatory_card_image',card_id=card.id,variant='computador',v=card.revision) }}" alt="{{ card.alt_text }}" width="{{ card.width }}" height="{{ card.height }}" loading="lazy" decoding="async"></picture>
 <span class="enlarge-desktop">Clique para ampliar</span><span class="enlarge-touch">Toque para ampliar</span></a></article>{% endfor %}</div></section>

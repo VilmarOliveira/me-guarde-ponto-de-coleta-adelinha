@@ -14,7 +14,9 @@ from flask import (
     url_for,
 )
 from core import calculate_discount, validate_surcharge
-from fastflow_gateway import Settings, GatewayError, transaction_id
+from fastflow_gateway import (
+    Settings, GatewayError, transaction_id, log_pix_failure, pix_creation_details,
+)
 from database import DatabaseIntegrityError
 import plan_service as ps
 import billing_archive
@@ -397,6 +399,20 @@ def refresh(db, app, oid, value):
         return False
 
 
+def refresh_ended_reservations(db, app, ids, value):
+    marks = ",".join("?" for _ in ids)
+    orders = db.execute(
+        f"""SELECT DISTINCT o.* FROM pickup_payment_orders o
+        JOIN pickup_payment_reservations r ON r.order_id=o.id
+        WHERE r.package_id IN ({marks}) AND o.local_method='Pix Fast'
+        AND o.state='pending'""",
+        tuple(ids),
+    ).fetchall()
+    for item in orders:
+        if ps.fast_pix_window_ended(item, value):
+            refresh(db, app, item["id"], value)
+
+
 def webhook(db, app, rid, tid, event, raw, value):
     row = db.execute(
         "SELECT * FROM pickup_payment_orders WHERE "
@@ -765,6 +781,7 @@ def install(
                     )
                 return fresh
 
+            refresh_ended_reservations(db(), app, ids, now())
             item, new = reserve(
                 db(),
                 rows,
@@ -815,13 +832,18 @@ def install(
                         (tid, item["id"]),
                     )
                     db().commit()
-                    apply(db(), item["id"], api.get(tid), now())
-                except GatewayError as e:
+                    details = pix_creation_details(data, api.get(tid))
+                    apply(db(), item["id"], details, now())
+                except (GatewayError, DatabaseIntegrityError) as e:
                     db().rollback()
-                    state = "uncertain" if created or e.uncertain else "failed"
+                    log_pix_failure(app.logger, item["id"], e)
+                    state = (
+                        "uncertain" if created or getattr(e, "uncertain", False)
+                        else "failed"
+                    )
                     db().execute(
                         "UPDATE pickup_payment_orders SET state=?,error_code=? WHERE id=? AND state='creating'",
-                        (state, e.code, item["id"]),
+                        (state, getattr(e, "code", "database_conflict"), item["id"]),
                     )
                     if state == "failed":
                         db().execute(
@@ -900,12 +922,9 @@ def install(
             order=item,
             snapshot=json.loads(item["snapshot"]),
             qr=(
-                qr_data(item["qr_text"])
-                if item["qr_text"]
-                and not item["archived_at"]
-                and item["state"] in ("pending", "approved", "under_review")
-                else None
+                qr_data(code) if (code := ps.payment_code(item, now())) else None
             ),
+            pix_window_ended=ps.fast_pix_window_ended(item, now()),
             labels=LABELS,
             advance_label=advance_label(item),
             choice=(
@@ -926,6 +945,7 @@ def install(
             "label": advance_label(item),
             "done": item["state"]
             not in ("creating", "uncertain", "pending", "approved", "under_review"),
+            "pix_available": bool(ps.payment_code(item, now())),
         }
 
     @bp.post("/cliente/pacotes/pagar")
@@ -947,6 +967,7 @@ def install(
             )
             if len(rows) != len(ids):
                 abort(404)
+            refresh_ended_reservations(db(), app, ids, now())
             held = (
                 db()
                 .execute(
@@ -1077,12 +1098,9 @@ def install(
             packages=codes,
             labels=LABELS,
             qr=(
-                qr_data(item["qr_text"])
-                if item["qr_text"]
-                and not item["archived_at"]
-                and item["state"] in ("pending", "approved", "under_review")
-                else None
+                qr_data(code) if (code := ps.payment_code(item, now())) else None
             ),
+            pix_window_ended=ps.fast_pix_window_ended(item, now()),
         )
 
     @bp.get("/painel/retirada/pix-fast/<oid>/status")
@@ -1097,6 +1115,7 @@ def install(
             "label": LABELS.get(item["state"], "Em consulta"),
             "done": item["state"]
             not in ("creating", "uncertain", "pending", "approved", "under_review"),
+            "pix_available": bool(ps.payment_code(item, now())),
         }
 
     @bp.post("/painel/retirada/pix-fast/<oid>/consultar")

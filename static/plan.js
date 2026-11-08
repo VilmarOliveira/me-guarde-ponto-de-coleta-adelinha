@@ -20,7 +20,10 @@
       const response = await fetch(panel.dataset.planPayment, {headers: {'Accept': 'application/json'}, cache: 'no-store', signal: AbortSignal.timeout(15000)});
       if (!response.ok || response.redirected) { attempts = 60; return; }
       const state = await response.json();
-      if (state.done) { window.location.reload(); return; }
+      if (state.done || (
+        typeof state.pix_available === 'boolean'
+        && state.pix_available !== Boolean(panel.querySelector('[data-plan-pix]'))
+      )) { window.location.reload(); return; }
       panel.querySelector('[data-plan-status]').textContent = state.label;
     } catch (_) { /* Leave the existing order visible and permit manual retry. */ }
     finally { busy = false; schedule(); }

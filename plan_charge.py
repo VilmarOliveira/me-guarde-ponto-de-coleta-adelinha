@@ -3,7 +3,7 @@
 from datetime import datetime
 from core import TZ
 from database import DatabaseIntegrityError
-from fastflow_gateway import GatewayError
+from fastflow_gateway import GatewayError, log_pix_failure, pix_creation_details
 import plan_service as service
 
 
@@ -27,10 +27,15 @@ def start(db, app, order, owner, value, card=None):
         data = api.create(order, owner, card)
         created = True
         tid = service.attach_creation_id(db, order["id"], data, value)
-        service.apply_transaction(db, order["id"], api.get(tid), value)
+        details = api.get(tid)
+        if order["method"] == "pix":
+            details = pix_creation_details(data, details)
+        service.apply_transaction(db, order["id"], details, value)
         return None
     except (GatewayError, DatabaseIntegrityError) as error:
         db.rollback()
+        if order["method"] == "pix":
+            log_pix_failure(app.logger, order["id"], error)
         code = getattr(error, "code", "database_conflict")
         state = (
             "uncertain"

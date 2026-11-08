@@ -413,6 +413,32 @@ def safe_time(value):
         return None
 
 
+def fast_pix_window_ended(order, value):
+    expires = safe_time(order["expires_at"])
+    return (
+        (order["local_method"] == "Pix Fast" or dict(order).get("method") == "pix")
+        and order["state"] == "pending"
+        and expires is not None
+        and parse(expires) <= value
+    )
+
+
+def payment_code(order, value):
+    if order["archived_at"] or not order["qr_text"]:
+        return None
+    if order["local_method"] == "Pix AI":
+        return (
+            order["qr_text"]
+            if order["state"] in ("pending", "approved", "under_review")
+            else None
+        )
+    if order["local_method"] != "Pix Fast" and dict(order).get("method") != "pix":
+        return None
+    if order["state"] != "pending" or fast_pix_window_ended(order, value):
+        return None
+    return order["qr_text"]
+
+
 def activate_order(db, order, value):
     order_id = order["id"]
     duplicate = db.execute(

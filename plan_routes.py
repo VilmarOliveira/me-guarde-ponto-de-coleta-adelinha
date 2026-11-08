@@ -199,19 +199,15 @@ def install(
             .execute("SELECT * FROM plan_cycles WHERE order_id=?", (oid,))
             .fetchone()
         )
-        code = (
-            order["qr_text"]
-            if not order["archived_at"]
-            and (order["method"] == "pix" or order["local_method"] == "Pix AI")
-            and order["state"] in ("pending", "approved", "under_review")
-            else None
-        )
+        value = now()
+        code = service.payment_code(order, value)
         return render_template(
             "plan_payment.html",
             order=order,
             cycle=cycle,
             labels=LABELS,
             qr=qr_data(code) if code else None,
+            pix_window_ended=service.fast_pix_window_ended(order, value),
             plan_rules=order["rules_text"],
             payment_choice=(
                 json.loads(order["policy_snapshot"])
@@ -325,7 +321,13 @@ def install(
             .fetchone()
         )
         if pending:
-            return redirect(url_for("plans.payment", oid=pending["id"]))
+            if service.fast_pix_window_ended(pending, now()):
+                refresh(db(), app, pending["id"], now())
+                pending = get_order(pending["id"], person["id"])
+            if pending["state"] not in ("expired", "cancelled") or pending[
+                "error_code"
+            ] in ("archived_payment_review", "payment_after_cancellation"):
+                return redirect(url_for("plans.payment", oid=pending["id"]))
         choice = policies.select(
             db(), app, scope, pricing.current(db()), client_id=person["id"]
         )
@@ -443,6 +445,7 @@ def install(
                 else LABELS.get(order["state"], "Em consulta")
             ),
             "done": order["state"] not in service.OPEN_STATES,
+            "pix_available": bool(service.payment_code(order, now())),
         }
 
     @bp.post("/webhooks/fastflow/retiradas/<rid>")
@@ -898,13 +901,8 @@ def install(
             person=person,
             cycle=cycle,
             labels=LABELS,
-            qr=(
-                qr_data(item["qr_text"])
-                if item["qr_text"]
-                and not item["archived_at"]
-                and item["state"] in service.OPEN_STATES
-                else None
-            ),
+            qr=qr_data(code) if (code := service.payment_code(item, now())) else None,
+            pix_window_ended=service.fast_pix_window_ended(item, now()),
         )
 
     @bp.get("/painel/configuracoes/plano/pagamentos/<oid>/status")
@@ -918,6 +916,7 @@ def install(
             "state": item["state"],
             "label": LABELS.get(item["state"], "Em consulta"),
             "done": item["state"] not in service.OPEN_STATES,
+            "pix_available": bool(service.payment_code(item, now())),
         }
 
     @bp.post("/painel/configuracoes/plano/verificar-provedor")

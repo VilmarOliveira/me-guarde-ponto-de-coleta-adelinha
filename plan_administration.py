@@ -391,6 +391,23 @@ def create_fast(
     ).get("plans", [])
     if not person["active"] or missing:
         raise ValueError("Regularize o cadastro e o contrato antes da contratação.")
+    import plan_routes
+
+    pending = order or db.execute(
+        "SELECT * FROM plan_orders WHERE client_id=? AND method='pix' "
+        "AND state='pending' ORDER BY created_at DESC LIMIT 1",
+        (person["id"],),
+    ).fetchone()
+    if pending and service.fast_pix_window_ended(pending, value):
+        plan_routes.refresh(db, app, pending["id"], value)
+        if order:
+            order = db.execute(
+                "SELECT * FROM plan_orders WHERE id=?", (order["id"],)
+            ).fetchone()
+            if order["state"] in ("expired", "cancelled"):
+                raise ValueError(
+                    "A cobrança anterior foi encerrada. Abra uma nova validação para gerar outro Pix."
+                )
     if order:
         if order["method"] != "pix" or order["state"] not in service.OPEN_STATES:
             raise ValueError("Este pedido não permite nova cobrança Fast.")

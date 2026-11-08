@@ -100,6 +100,36 @@ def transaction_id(value):
     return value
 
 
+def pix_creation_details(created, details):
+    """Use the POST's QR only for the same, independently verified transaction."""
+    if not isinstance(details, dict) or (
+        transaction_id(created.get("id"))
+        != transaction_id(details.get("id", details.get("transaction_id")))
+    ):
+        raise GatewayError(code="identity_mismatch")
+    if details.get("status") != "pending":
+        return details
+    code = details.get("qr_code_text")
+    original = created.get("qr_code_text")
+    merged = dict(details)
+    if not code and isinstance(original, str):
+        merged["qr_code_text"] = original
+    if not merged.get("qr_code_expires_at") and (not code or code == original):
+        merged["qr_code_expires_at"] = created.get("qr_code_expires_at")
+    return merged
+
+
+def log_pix_failure(logger, order_id, error):
+    # Do not log response bodies, customer data, credentials or Pix codes.
+    logger.warning(
+        "Pix Fast: pedido=%s motivo=%s método=%s HTTP=%s",
+        order_id,
+        getattr(error, "code", "database_conflict"),
+        getattr(error, "http_method", None),
+        getattr(error, "http_status", None),
+    )
+
+
 class FastFlow:
     def __init__(self, settings, rate_guard=None):
         self.settings = settings

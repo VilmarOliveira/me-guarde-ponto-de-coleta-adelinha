@@ -21,6 +21,11 @@
   legend { max-width: 100%; padding-inline: 4px; }
   fieldset label, .terms-check, .users-management td label, .package > label { min-height: 44px; align-items: center; }
   fieldset label { max-width: 100%; margin-right: 12px; }
+  /* Address labels sit above inputs; inline option labels elsewhere are unchanged. */
+  fieldset[data-cep-form] label { display: block; width: 100%; margin: 6px 0; overflow-wrap: normal; word-break: normal; }
+  fieldset[data-cep-form] .cep-status { grid-column: 1 / -1; order: 1; padding-top: 0; }
+  fieldset[data-cep-form] .cep-status:empty { display: none; }
+
   input[type=checkbox], input[type=radio] { flex: none; accent-color: var(--brand-teal); }
   .button, button, summary.button { min-width: 44px; min-height: 44px; max-width: 100%; height: auto; padding: 10px 16px; white-space: normal; overflow-wrap: anywhere; line-height: 1.45; text-align: center; }
   .full { min-height: 54px; }

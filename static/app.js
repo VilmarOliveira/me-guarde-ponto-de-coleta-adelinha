@@ -487,6 +487,18 @@ document.querySelector('#send-registration-code')?.addEventListener('click',asyn
 document.querySelectorAll('[data-carousel]').forEach((carousel) => {
   const slides = [...carousel.querySelectorAll('[data-slide]')];
   if (slides.length < 2) return;
+  const load = (index) => {
+    const image = slides[(index + slides.length) % slides.length].querySelector('img');
+    if (image.dataset.src) {
+      image.loading = 'eager';
+      image.srcset = image.dataset.srcset || '';
+      image.src = image.dataset.src;
+      delete image.dataset.src;
+    }
+    return image.decode().catch(() => {});
+  };
+  let imageGeneration = 0;
+  let firstReady = false;
   const dots = [...carousel.querySelectorAll('[data-slide-to]')];
   const track = carousel.querySelector('.banner-slides');
   const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
@@ -505,7 +517,7 @@ document.querySelectorAll('[data-carousel]').forEach((carousel) => {
     // or visible keyboard focus should keep autoplay paused after touchend.
     return dots.includes(active) && (mouseDevice.matches || active.matches(':focus-visible'));
   };
-  const paused = () => suspended || document.hidden || reducedMotion.matches || hovered || touching || focused();
+  const paused = () => !firstReady || suspended || document.hidden || reducedMotion.matches || hovered || touching || focused();
   const show = (index) => {
     current = (index + slides.length) % slides.length;
     slides.forEach((slide, i) => {
@@ -531,11 +543,17 @@ document.querySelectorAll('[data-carousel]').forEach((carousel) => {
       // replay an overdue tick after suspension: wait a fresh full interval.
       const elapsed = Math.max(performance.now() - started, Date.now() - wallStarted);
       if (elapsed > interval + 250) { schedule(); return; }
-      show(current + 1);
-      schedule();
+      navigate(current + 1);
     }, interval);
   };
-  const navigate = (index) => { show(index); schedule(); };
+  const navigate = async (index) => {
+    const token = ++imageGeneration;
+    clearTimeout(timer);
+    await load(index);
+    if (token !== imageGeneration) return;
+    show(index); schedule();
+    load(current + 1);
+  };
   const suspend = () => {
     suspended = true;
     hovered = false;
@@ -609,7 +627,7 @@ document.querySelectorAll('[data-carousel]').forEach((carousel) => {
   window.addEventListener('pagehide', suspend);
   window.addEventListener('pageshow', resume);
   show(current);
-  resume();
+  load(current).then(() => { firstReady = true; load(current + 1); resume(); });
 });
 
 const themeForm = document.querySelector('#theme-form');

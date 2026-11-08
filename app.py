@@ -3,6 +3,7 @@ import plan_routes
 import pickup_payments
 import customer_area
 import metrics_charts
+from public_images import banner_version
 import payment_policies
 import pickup_history as pickup_history_data
 import os
@@ -308,7 +309,7 @@ def create_app(test_config=None):
     def protect_session_pages(response):
         # A página inicial muda conforme a sessão; dados autenticados nunca devem
         # ser reaproveitados por caches compartilhados da Oracle ou do navegador.
-        if request.endpoint in {"index", "registration_page", "register", "terms", "current_contract_pdf", "client_login", "client_login_post", "privacy"} or (request.endpoint or "").startswith("google_login.") or ((session.get("staff") or session.get("client_id")) and request.endpoint not in {"header_identity", "main_service_banner", "explanatory_card_image"}):
+        if request.endpoint in {"index", "registration_page", "register", "terms", "current_contract_pdf", "client_login", "client_login_post", "privacy"} or (request.endpoint or "").startswith("google_login.") or ((session.get("staff") or session.get("client_id")) and request.endpoint not in {"header_identity", "main_service_banner", "banner_image", "site_photo_image", "explanatory_card_image"}):
             response.headers["Cache-Control"] = "private, no-store, max-age=0"
             response.headers["Vary"] = "Cookie"
         if (request.endpoint or "").startswith("google_login."):
@@ -455,17 +456,25 @@ def create_app(test_config=None):
     def registration_page():
         return render_template('registration.html',registration_form={})
 
+    def banner_response(data, mime):
+        width = request.args.get('largura')
+        if width:
+            if width not in ('640','1280','2048'):
+                abort(400)
+            data,mime = banner_version(data,int(width))
+        response = Response(data,mimetype=mime,headers={'Cache-Control':'public,max-age=3600','X-Content-Type-Options':'nosniff'})
+        response.set_etag(hashlib.sha256(data).hexdigest())
+        return response.make_conditional(request)
+
     @app.get("/identidade/banner-principal")
     def main_service_banner():
         setting = db().execute(
             "SELECT main_banner_image,main_banner_mime,main_banner_updated_at FROM settings WHERE id=1"
         ).fetchone()
         if setting and setting["main_banner_image"]:
-            return Response(
-                bytes(setting["main_banner_image"]),
-                mimetype=setting["main_banner_mime"],
-                headers={"Cache-Control": "public,max-age=3600"},
-            )
+            return banner_response(bytes(setting['main_banner_image']),setting['main_banner_mime'])
+        if request.args.get('largura'):
+            return banner_response((Path(app.static_folder)/f'brand/{BRAND_VERSION}/me-guarde-banner.webp').read_bytes(),'image/webp')
         return redirect(url_for("static", filename=f"brand/{BRAND_VERSION}/me-guarde-banner.webp", v=BRAND_VERSION))
 
     @app.post("/metricas/evento")
@@ -597,7 +606,7 @@ def create_app(test_config=None):
     def banner_image(banner_id):
         banner = db().execute("SELECT image,mime_type,updated_at FROM site_banners WHERE id=?", (banner_id,)).fetchone()
         if not banner: abort(404)
-        return Response(bytes(banner["image"]), mimetype=banner["mime_type"], headers={"Cache-Control": "public,max-age=3600"})
+        return banner_response(bytes(banner["image"]),banner["mime_type"])
 
     @app.route("/painel/configuracoes/banners", methods=["GET", "POST"])
     @admin_required
@@ -1300,6 +1309,47 @@ def create_app(test_config=None):
         db().commit()
         flash("Dados atualizados com sucesso", "success")
         return redirect(url_for("client_area"))
+
+    @app.route('/cliente/google/desvincular', methods=['GET', 'POST'])
+    @client_login_required
+    def client_unlink_google():
+        if session.get('staff'):
+            abort(403)
+        person = db().execute('SELECT * FROM clients WHERE id=?', (session['client_id'],)).fetchone()
+        linked = db().execute('SELECT 1 FROM google_client_identities WHERE client_id=?', (person['id'],)).fetchone()
+        if not linked:
+            return redirect(url_for('client_area', aba='dados'))
+        if not person['password_hash']:
+            flash('Crie uma senha primeiro pela recuperação de senha. A conta Google é seu único acesso e continuará vinculada até você verificar outro acesso.', 'error')
+            return redirect(url_for('client_area', aba='dados'))
+        if request.method == 'GET':
+            return render_template('google_unlink.html')
+        identifier = str(person['id'])
+        if login_blocked('google-unlink', identifier):
+            flash('Muitas tentativas. Aguarde 15 minutos e tente novamente.', 'error')
+            return redirect(url_for('client_area', aba='dados'))
+        valid = check_password_hash(person['password_hash'], request.form.get('password', ''))
+        record_login('google-unlink', identifier, valid)
+        if not valid or request.form.get('confirm') != 'yes':
+            flash('Confirme a desvinculação e informe a senha atual para verificar seu outro acesso.', 'error')
+            return render_template('google_unlink.html'), 400
+        db().commit()
+        db().begin_write()
+        fresh = db().execute('SELECT password_hash,session_version FROM clients WHERE id=?' + (' FOR UPDATE' if db().postgres else ''), (person['id'],)).fetchone()
+        if fresh['password_hash'] != person['password_hash'] or fresh['session_version'] != session['client_session_version']:
+            db().rollback()
+            abort(409)
+        db().execute('DELETE FROM google_client_identities WHERE client_id=?', (person['id'],))
+        db().execute('DELETE FROM google_login_pending WHERE client_id=?', (person['id'],))
+        db().execute('UPDATE clients SET session_version=session_version+1 WHERE id=?', (person['id'],))
+        audit('desvincular_google', 'cliente', person['id'], 'Outro acesso verificado por senha; cadastro e histórico preservados.')
+        db().commit()
+        session['client_session_version'] = fresh['session_version'] + 1
+        session['client_auth_method'] = 'password'
+        session.pop('google_pending', None)
+        session.pop('google_flow', None)
+        flash('Conta Google desvinculada com sucesso. Use CPF ou e-mail e senha para entrar.', 'success')
+        return redirect(url_for('client_area', aba='dados'))
 
     @app.post('/cliente/alterar-senha')
     @client_login_required

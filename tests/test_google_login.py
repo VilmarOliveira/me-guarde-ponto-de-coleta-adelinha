@@ -252,3 +252,20 @@ def test_home_plan_intent_survives_google_and_secure_first_link(site):
         assert session['client_auth_method']=='google' and not session.get('staff')
         assert 'client_login_destination' not in session
     assert client.get(response.location).status_code==200
+
+
+def test_unlinked_identity_requires_explicit_password_link_again(site):
+    app,client,database,_=site
+    assert callback(site).status_code==200
+    client.post('/cliente/google/confirmar',data={'password':'senha-segura','csrf_token':csrf(client)})
+    response=client.post('/cliente/google/desvincular',data={'password':'senha-segura','confirm':'yes','csrf_token':csrf(client)})
+    assert response.status_code==302
+    with sqlite3.connect(database) as db:
+        assert db.execute('SELECT COUNT(*) FROM google_client_identities').fetchone()[0]==0
+    client.post('/cliente/sair',data={'csrf_token':csrf(client)})
+    response=callback(site)
+    assert response.request.path=='/cliente/google/confirmar'
+    with sqlite3.connect(database) as db:
+        assert db.execute('SELECT COUNT(*) FROM google_client_identities').fetchone()[0]==0
+    with client.session_transaction() as session:
+        assert not session.get('client_id')

@@ -251,6 +251,7 @@ def reserve_order(
     expected_key=None,
     accepted_by_client=True,
     expected_amount=None,
+    retry_from=None,
 ):
     db.commit()
     db.begin_write()
@@ -262,6 +263,33 @@ def reserve_order(
     if unresolved:
         db.commit()
         return dict(unresolved), None
+    original = None
+    if retry_from:
+        original = db.execute(
+            "SELECT * FROM plan_orders WHERE id=? AND client_id=?",
+            (retry_from, owner["id"]),
+        ).fetchone()
+        child = db.execute(
+            "SELECT * FROM plan_orders WHERE retry_of=? ORDER BY created_at DESC LIMIT 1",
+            (retry_from,),
+        ).fetchone()
+        if child:
+            db.commit()
+            return dict(child), None
+        if (
+            not original
+            or original["state"] not in ("expired", "cancelled")
+            or original["paid_at"]
+            or original["archived_at"]
+            or original["error_code"]
+            or original["local_method"] != "Pix Fast"
+            or original["cancel_state"]
+        ):
+            db.commit()
+            return (
+                None,
+                "A cobrança anterior precisa ter o encerramento sem pagamento confirmado pela Fast.",
+            )
     current, future, _ = cycles(db, owner["id"], value)
     if future and not future["suspended"]:
         db.commit()
@@ -286,7 +314,13 @@ def reserve_order(
     if old:
         db.commit()
         return dict(old), None
-    price = pricing.current(db)
+    if original and original["cycle_key"] != key:
+        db.commit()
+        return (
+            None,
+            "O ciclo mudou. Confira seu plano antes de iniciar outro pagamento.",
+        )
+    price = original["amount_cents"] if original else pricing.current(db)
     if expected_amount is not None and str(price) != str(expected_amount):
         db.commit()
         return None, "A mensalidade mudou. Confira o novo valor antes de confirmar."
@@ -305,8 +339,8 @@ def reserve_order(
     oid = str(uuid.uuid4())
     stamp = iso(value)
     db.execute(
-        """INSERT INTO plan_orders(id,client_id,method,amount_cents,cycle_key,renewal_of,state,created_at,payer_document,callback_url,rules_version,rules_text,accepted_at,local_method,creation_started_at)
-        VALUES(?,?,?,?,?,?,'creating',?,?,?,?,?,?,'Pix Fast','')""",
+        """INSERT INTO plan_orders(id,client_id,method,amount_cents,cycle_key,renewal_of,state,created_at,payer_document,callback_url,rules_version,rules_text,accepted_at,local_method,creation_started_at,retry_of,root_order_id,policy_snapshot)
+        VALUES(?,?,?,?,?,?,'creating',?,?,?,?,?,?,'Pix Fast','',?,?,?)""",
         (
             oid,
             owner["id"],
@@ -317,9 +351,16 @@ def reserve_order(
             stamp,
             re.sub(r"\D", "", owner["cpf"]),
             settings.callback(oid),
-            offered_version(db, price),
-            offered_rules(db, price),
-            stamp if accepted_by_client else "",
+            original["rules_version"] if original else offered_version(db, price),
+            original["rules_text"] if original else offered_rules(db, price),
+            (
+                original["accepted_at"]
+                if original
+                else (stamp if accepted_by_client else "")
+            ),
+            retry_from,
+            (original["root_order_id"] or original["id"]) if original else None,
+            original["policy_snapshot"] if original else None,
         ),
     )
     db.commit()

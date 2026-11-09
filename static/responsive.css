@@ -21,6 +21,11 @@
   legend { max-width: 100%; padding-inline: 4px; }
   fieldset label, .terms-check, .users-management td label, .package > label { min-height: 44px; align-items: center; }
   fieldset label { max-width: 100%; margin-right: 12px; }
+  /* Address labels sit above inputs; inline option labels elsewhere are unchanged. */
+  fieldset[data-cep-form] label { display: block; width: 100%; margin: 6px 0; overflow-wrap: normal; word-break: normal; }
+  fieldset[data-cep-form] .cep-status { grid-column: 1 / -1; order: 1; padding-top: 0; }
+  fieldset[data-cep-form] .cep-status:empty { display: none; }
+
   input[type=checkbox], input[type=radio] { flex: none; accent-color: var(--brand-teal); }
   .button, button, summary.button { min-width: 44px; min-height: 44px; max-width: 100%; height: auto; padding: 10px 16px; white-space: normal; overflow-wrap: anywhere; line-height: 1.45; text-align: center; }
   .full { min-height: 54px; }
@@ -340,3 +345,26 @@ input[type=checkbox],input[type=radio]{width:22px;height:22px;min-width:22px;pad
 .registration-callout{background:#e8f4fc;border:1px solid #c3dfef;border-radius:18px;padding:28px;text-align:center;display:flex;justify-content:center}.registration-callout .button{margin:0}.customer-tabs{display:flex!important;flex-wrap:wrap;gap:8px}.customer-tabs>a{flex:0 1 auto;white-space:normal;word-break:normal;overflow-wrap:normal;min-height:46px}.actions,.uniform-actions{align-items:stretch;gap:8px}.actions>.button,.actions>button,.actions>form{margin:0;min-height:44px}.actions>form{display:flex}.actions>form>button{margin:0;height:100%}
 .vertical-chart{display:flex;gap:12px;max-width:100%;margin-block:24px}.chart-y-axis{display:flex;flex-direction:column;justify-content:space-between;flex:none;height:220px;margin-top:24px;min-width:32px;text-align:right;font-size:14px}.chart-columns-scroll{min-width:0;flex:1;overflow-x:auto;max-width:100%;overscroll-behavior-inline:contain;padding-top:24px}.chart-columns{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(86px,1fr);gap:12px;border-bottom:1px solid var(--line);width:100%;min-width:max-content}.chart-column{min-width:86px;text-align:center}.column-plot{height:220px;position:relative;border-bottom:1px solid var(--ink);background:repeating-linear-gradient(to top,transparent 0,transparent calc(25% - 1px),var(--line) calc(25% - 1px),var(--line) 25%)}.column-bar{position:absolute;bottom:0;left:20%;width:60%;background:var(--orange);border-radius:5px 5px 0 0}.column-count{position:absolute;left:0;width:100%;font-weight:700;font-size:14px}.column-period{display:block;font-size:14px;line-height:1.4;margin-top:10px;padding-bottom:10px;white-space:nowrap}.chart-columns-scroll:focus-visible{outline:3px solid var(--orange-ink);outline-offset:3px}
 @media(max-width:600px){.actions:not(.section-tabs):not(.payment-scope-tabs):not(.user-tabs):not(.public-steps){display:flex;flex-direction:column;align-items:stretch}.actions:not(.section-tabs):not(.payment-scope-tabs):not(.user-tabs)>.button,.actions:not(.section-tabs):not(.payment-scope-tabs):not(.user-tabs)>button,.actions:not(.section-tabs):not(.payment-scope-tabs):not(.user-tabs)>form{width:100%;flex:0 1 auto}.actions>form>button{width:100%}.customer-tabs>a{max-width:100%}}
+
+/* Public header: full navigation on desktop, three actions plus a separate mobile menu. */
+@media screen {
+ .public-mobile-actions{display:contents}.site-header .login-mobile,.public-client-menu{display:none}
+ .site-header .header-login{background:#d43f00;color:#fff;border:1px solid #d43f00;font-weight:800;white-space:nowrap}
+ .site-header .header-login:hover{background:#c43b00;color:#fff}
+ .public-header.nav-compact .public-mobile-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px}
+ .public-header.nav-compact .login-mobile{display:inline-flex}
+ .public-header.nav-compact .public-client-desktop{display:none}
+ .public-header.nav-compact .public-client-menu{display:inline-flex}
+ .public-header.nav-compact .site-nav.open{display:grid;grid-template-columns:minmax(0,1fr);width:100%;gap:8px}
+ .public-header.nav-compact .site-nav.open>a{width:100%;margin:0}
+ .public-header.nav-measuring .public-client-desktop{display:inline-flex}
+ .public-header.nav-measuring .public-client-menu{display:none}
+}
+@media screen and (max-width:47.99rem){
+ .public-header .brand{flex:1 0 100%!important;max-width:220px}
+ .public-header.nav-compact .public-mobile-actions{width:100%;justify-content:space-between}
+ .public-header.nav-compact .public-mobile-actions>a,.public-header.nav-compact .public-mobile-actions>button{flex:1 1 auto;min-width:0;min-height:44px;padding:9px 8px;font-size:14px;gap:4px;white-space:nowrap;margin:0}
+ .public-header.nav-compact .public-mobile-actions .ui-icon{width:18px;height:18px;margin:0;flex:none}
+}
+
+.code-send-success{color:#116843;font-weight:600}.code-send-error{color:#9a2416;font-weight:600}

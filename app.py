@@ -1088,16 +1088,23 @@ def create_app(test_config=None):
             return {"error": "Limite de reenvios atingido. Aguarde e tente novamente."}, 429
         if previous.get("sent_at") and now()-datetime.fromisoformat(previous["sent_at"]) < timedelta(seconds=60):
             return {"error":"Aguarde 60 segundos antes de reenviar o código."},429
-        if not valid_cpf(cpf) or not valid_email(destination) or not destination:
-            return {"error": "Confira o CPF e o e-mail informado."}, 400
+        if not valid_cpf(cpf):
+            return {"error": "CPF inválido. Confira os 11 números antes de solicitar o código.", "field":"cpf"}, 400
+        if not destination or not valid_email(destination):
+            return {"error": "E-mail inválido. Confira o endereço antes de solicitar o código.", "field":"email"}, 400
         code = f"{secrets.randbelow(1000000):06d}"
         try: sent, detail = send_code(channel, destination, code)
         except Exception: sent, detail = False, "Falha no provedor"
-        if not sent: return {"error": f"Envio indisponível: {detail}."}, 503
+        if not sent:
+            app.logger.warning('registration_code_failed stage=gmail configuration_ready=%s', notification_config_status()['email'])
+            return {"error": f"Não foi possível enviar o código. {detail}. Tente novamente ou procure o ponto."}, 503
         session["registration_confirmation"] = {"cpf":cpf,"email":destination,"version":version,"text_digest":hashlib.sha256(text.encode()).hexdigest(),"channel":channel,
             "destination":destination,"code_hash":hashlib.sha256(code.encode()).hexdigest(),
             "expires_at":(now()+timedelta(minutes=10)).isoformat(),"sent_at":now().isoformat(),"attempts":0,"sends":previous.get("sends",0)+1}
-        return {"message":"Código enviado. Ele expira em 10 minutos."}
+        local, domain = destination.rsplit('@',1)
+        suffix = '.' + domain.rsplit('.',1)[1] if '.' in domain else ''
+        masked = local[:1] + '***@' + domain[:1] + '***' + suffix
+        return {"message":f"Enviamos um código para {masked}. Confira sua caixa de entrada e, se necessário, a pasta de spam. Depois, digite o código abaixo."}
 
     @app.get('/privacidade')
     def privacy():

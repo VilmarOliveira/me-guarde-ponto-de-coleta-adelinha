@@ -67,7 +67,11 @@ def replaceable_pix(order):
         and not any(
             order[key]
             for key in (
-                "paid_at", "manual_paid_at", "refunded_at", "archived_at", "cancel_state"
+                "paid_at",
+                "manual_paid_at",
+                "refunded_at",
+                "archived_at",
+                "cancel_state",
             )
         )
     )
@@ -101,14 +105,17 @@ def refresh(db, app, order_id, value, *, force=False, replace_pix=False):
     if (
         replace_pix
         and order["checked_at"]
-        and order["check_after"] == service.iso(
-            service.parse(order["checked_at"]) + timedelta(seconds=20)
-        )
+        and order["check_after"]
+        == service.iso(service.parse(order["checked_at"]) + timedelta(seconds=20))
         and not order["error_code"]
     ):
         claim = db.execute(
             "UPDATE plan_orders SET check_after=? WHERE id=? AND check_after=? RETURNING id",
-            (service.iso(value + timedelta(seconds=90)), order_id, order["check_after"]),
+            (
+                service.iso(value + timedelta(seconds=90)),
+                order_id,
+                order["check_after"],
+            ),
         ).fetchone()
     else:
         claim = db.execute(
@@ -149,7 +156,11 @@ def refresh(db, app, order_id, value, *, force=False, replace_pix=False):
         service.apply_transaction(db, order_id, data, value)
         return True
     except (GatewayError, DatabaseIntegrityError) as error:
-        code = getattr(error, "code", "database_conflict")
+        code = (
+            "provider_forbidden"
+            if getattr(error, "http_status", None) == 403
+            else getattr(error, "code", "database_conflict")
+        )
         db.rollback()
         db.execute(
             "UPDATE plan_orders SET checked_at=?,error_code=?,check_after=? WHERE id=?",
@@ -520,9 +531,11 @@ def install(
         ):
             if original["state"] != "paid":
                 flash(
-                    "A Fast não confirmou o encerramento sem pagamento. Nenhum Pix novo foi gerado. Consulte a cobrança ou fale com o ponto se o problema continuar."
-                    if replacing
-                    else "Consulte novamente. Só é possível gerar outro Pix após a Fast confirmar o encerramento sem pagamento.",
+                    (
+                        "A Fast não confirmou o encerramento sem pagamento. Nenhum Pix novo foi gerado. Consulte a cobrança ou fale com o ponto se o problema continuar."
+                        if replacing
+                        else "Consulte novamente. Só é possível gerar outro Pix após a Fast confirmar o encerramento sem pagamento."
+                    ),
                     "info",
                 )
             return redirect(url_for("plans.payment", oid=oid))
@@ -1224,6 +1237,9 @@ def install(
                     "title": "Verificando cobrança",
                     "text": "Consulte a cobrança existente antes de trocar de modalidade.",
                 }
-        return {"customer_plan_choice": choice}
+        return {
+            "customer_plan_choice": choice,
+            "customer_plan_pending": dict(pending) if pending else None,
+        }
 
     app.register_blueprint(bp)

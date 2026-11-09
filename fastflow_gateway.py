@@ -48,6 +48,7 @@ class Settings:
     active: bool = False
     card_enabled: bool = False
     card_pci_ready: bool = False
+    new_charges_enabled: bool = True
 
     @classmethod
     def from_config(cls, config):
@@ -59,6 +60,7 @@ class Settings:
             enabled(config.get("FASTFLOW_CARD_ENABLED", "0"))
             and CARD_CHECKOUT_AVAILABLE,
             enabled(config.get("FASTFLOW_CARD_PCI_READY", "0")),
+            enabled(config.get("FASTFLOW_NEW_CHARGES_ENABLED", "1")),
         )
 
     @property
@@ -220,6 +222,11 @@ class FastFlow:
         return True
 
     def create(self, order, owner, card=None):
+        if not self.settings.new_charges_enabled:
+            raise GatewayError(
+                "Novas cobranças Fast estão pausadas para revisão da integração.",
+                code="creation_paused",
+            )
         self.provider()
         callback = order.get("callback_url") or self.settings.callback(order["id"])
         amount = order.get("amount_cents", AMOUNT_CENTS) / 100
@@ -270,7 +277,7 @@ class FastFlow:
         return data
 
     def cancel(self, identifier):
-        return self.request('DELETE','/transactions/'+transaction_id(identifier))
+        return self.request("DELETE", "/transactions/" + transaction_id(identifier))
 
     def find(self, order):
         # The order-specific documented callback is the correlation identifier

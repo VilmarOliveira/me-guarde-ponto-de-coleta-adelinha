@@ -263,6 +263,9 @@ def reserve_order(
     if unresolved:
         db.commit()
         return dict(unresolved), None
+    if method != "administrative" and not settings.new_charges_enabled:
+        db.commit()
+        return None, "Novas cobranças Fast estão pausadas para revisão da integração."
     original = None
     if retry_from:
         original = db.execute(

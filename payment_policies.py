@@ -91,7 +91,9 @@ def select(db, app, scope, cents, configured=None, client_id=None):
         if method == "Pix Fast" and failed_fast:
             continue
         if method == "Pix Fast" and not (
-            Settings.from_config(app.config).ready and 400 <= cents <= 500000
+            Settings.from_config(app.config).ready
+            and Settings.from_config(app.config).new_charges_enabled
+            and 400 <= cents <= 500000
         ):
             continue
         if method == "Pix AI" and not (

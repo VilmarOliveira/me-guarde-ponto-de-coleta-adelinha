@@ -482,7 +482,25 @@ window.addEventListener('offline',()=>{reconnectNotice=document.createElement('d
 window.addEventListener('online',()=>{if(reconnectNotice)reconnectNotice.remove()});
 window.addEventListener('beforeunload',()=>sessionStorage.setItem('adelinha-scroll',String(scrollY)));
 window.addEventListener('pageshow',()=>{if(location.hash)return;const y=Number(sessionStorage.getItem('adelinha-scroll'));if(y)scrollTo(0,y)});
-document.querySelector('#send-registration-code')?.addEventListener('click',async()=>{const form=document.querySelector('#registration-form'),status=document.querySelector('#registration-code-status');status.textContent='Enviando código…';try{const response=await fetch('/cadastro/enviar-codigo',{method:'POST',body:new FormData(form),headers:{'X-Requested-With':'fetch'}});const data=await response.json();status.textContent=data.message||data.error}catch(_){status.textContent='Não foi possível enviar. Confira a conexão e tente novamente.'}});
+document.querySelector('#send-registration-code')?.addEventListener('click', async (event) => {
+  const button=event.currentTarget, form=document.querySelector('#registration-form'), status=document.querySelector('#registration-code-status');
+  if (button.disabled) return;
+  status.className='';
+  for (const name of ['cpf','email']) {
+    const field=form.elements[name];
+    if (!field.reportValidity()) { status.textContent=name==='cpf'?'Confira o CPF antes de solicitar o código.':'Confira o e-mail antes de solicitar o código.'; status.className='code-send-error'; return; }
+  }
+  button.disabled=true; status.textContent='Enviando código…';
+  try {
+    const response=await fetch('/cadastro/enviar-codigo',{method:'POST',body:new FormData(form),headers:{'X-Requested-With':'fetch'}});
+    const data=await response.json();
+    const success=response.ok && typeof data.message==='string';
+    status.textContent=success?data.message:(data.error||'O envio não foi confirmado. Tente novamente ou procure o ponto.');
+    status.className=success?'code-send-success':'code-send-error';
+    if (!success && data.field) form.elements[data.field]?.focus();
+  } catch (_) { status.className='code-send-error'; status.textContent='Não foi possível enviar. Confira a conexão e tente novamente.'; }
+  finally { button.disabled=false; }
+});
 
 document.querySelectorAll('[data-carousel]').forEach((carousel) => {
   const slides = [...carousel.querySelectorAll('[data-slide]')];

@@ -166,6 +166,7 @@ def create_app(test_config=None):
         GOOGLE_LOGIN_CLIENT_SECRET=os.environ.get('GOOGLE_LOGIN_CLIENT_SECRET', ''),
         GOOGLE_LOGIN_REDIRECT_URI=os.environ.get('GOOGLE_LOGIN_REDIRECT_URI', ''),
         FASTFLOW_ENABLED=os.environ.get('FASTFLOW_ENABLED','0'),
+        FASTFLOW_NEW_CHARGES_ENABLED=os.environ.get('FASTFLOW_NEW_CHARGES_ENABLED','1'),
         FASTFLOW_API_KEY=os.environ.get('FASTFLOW_API_KEY',''),
         FASTFLOW_WEBHOOK_SECRET=os.environ.get('FASTFLOW_WEBHOOK_SECRET',''),
         FASTFLOW_PUBLIC_ORIGIN=os.environ.get('FASTFLOW_PUBLIC_ORIGIN',''),
@@ -2045,7 +2046,7 @@ def create_app(test_config=None):
     pickup_payments.install(app,db,login_required,current_staff,now,fees,qr_code_data_url,client_login_required)
     @app.context_processor
     def action_context():
-        if not session.get('client_id'):return {}
+        if not session.get('client_id') or session.get('staff') or not request.path.startswith('/cliente') or request.endpoint in ('client_login','client_login_post','password_recovery'):return {}
         person=db().execute('SELECT * FROM clients WHERE id=?',(session['client_id'],)).fetchone()
         if not person or not person['active'] or person['session_version']!=session.get('client_session_version'):return {}
         items,missing,count=client_actions.summary(db(),person,now().isoformat())

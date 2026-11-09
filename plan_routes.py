@@ -504,6 +504,12 @@ def install(
             abort(403)
         if eligible(db(), person, now()):
             return redirect(url_for("client_actions.hub"))
+        if not settings().new_charges_enabled:
+            flash(
+                "Novas cobranças Fast estão pausadas para revisão. A cobrança atual permanece preservada.",
+                "info",
+            )
+            return redirect(url_for("plans.payment", oid=oid))
         child = (
             db()
             .execute(

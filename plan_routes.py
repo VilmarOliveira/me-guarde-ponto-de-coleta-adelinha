@@ -58,30 +58,67 @@ def gateway(app):
     return FastFlow(Settings.from_config(app.config), rate_guard=rate_guard)
 
 
-def refresh(db, app, order_id, value, *, force=False):
+def replaceable_pix(order):
+    return (
+        order["method"] == "pix"
+        and order["local_method"] == "Pix Fast"
+        and order["state"] == "pending"
+        and bool(order["transaction_id"])
+        and not any(
+            order[key]
+            for key in (
+                "paid_at", "manual_paid_at", "refunded_at", "archived_at", "cancel_state"
+            )
+        )
+    )
+
+
+def refresh(db, app, order_id, value, *, force=False, replace_pix=False):
     row = db.execute("SELECT * FROM plan_orders WHERE id=?", (order_id,)).fetchone()
     if not row:
         return False
     order = dict(row)
     if order["method"] == "administrative":
         return False
+    if replace_pix and not replaceable_pix(order):
+        return False
     if (
         force
+        and not replace_pix
         and order["checked_at"]
         and service.parse(order["checked_at"]) > value - timedelta(seconds=5)
     ):
         return False
     if (
         not force
+        and not replace_pix
         and order["check_after"]
         and service.parse(order["check_after"]) > value
     ):
         return False
-    # Claim a short lease so repeated tabs and webhooks do not flood the API.
-    claim = db.execute(
-        "UPDATE plan_orders SET check_after=? WHERE id=? AND (check_after IS NULL OR check_after<=?) RETURNING id",
-        (service.iso(value + timedelta(seconds=20)), order_id, service.iso(value)),
-    ).fetchone()
+    # An explicit replacement can skip a completed normal consultation's
+    # cooldown, but not a request in progress or the backoff after an error.
+    if (
+        replace_pix
+        and order["checked_at"]
+        and order["check_after"] == service.iso(
+            service.parse(order["checked_at"]) + timedelta(seconds=20)
+        )
+        and not order["error_code"]
+    ):
+        claim = db.execute(
+            "UPDATE plan_orders SET check_after=? WHERE id=? AND check_after=? RETURNING id",
+            (service.iso(value + timedelta(seconds=90)), order_id, order["check_after"]),
+        ).fetchone()
+    else:
+        claim = db.execute(
+            "UPDATE plan_orders SET check_after=? WHERE id=? AND (check_after IS NULL OR check_after<=?) RETURNING id",
+            (
+                service.iso(value + timedelta(seconds=90 if replace_pix else 20)),
+                order_id,
+                service.iso(value),
+            ),
+        ).fetchone()
     db.commit()
     if not claim:
         return False
@@ -99,6 +136,16 @@ def refresh(db, app, order_id, value, *, force=False):
             )
             db.commit()
             return False
+        if replace_pix and data.get("status") == "pending":
+            current = db.execute(
+                "SELECT * FROM plan_orders WHERE id=?", (order_id,)
+            ).fetchone()
+            if not current or not replaceable_pix(current):
+                return False
+            tid = service.validate_transaction(dict(current), data)
+            db.commit()
+            api.cancel(tid)
+            data = api.get(tid)
         service.apply_transaction(db, order_id, data, value)
         return True
     except (GatewayError, DatabaseIntegrityError) as error:
@@ -215,6 +262,7 @@ def install(
             and not order["archived_at"]
             and not order["error_code"]
             and not order["cancel_state"],
+            can_replace_pix=replaceable_pix(order),
             plan_rules=order["rules_text"],
             payment_choice=(
                 json.loads(order["policy_snapshot"])
@@ -455,8 +503,12 @@ def install(
         )
         if child:
             return redirect(url_for("plans.payment", oid=child["id"]))
-        # A browser clock or local expiry alone never authorizes a new charge.
-        verified = refresh(db(), app, oid, now(), force=True)
+        # Only an explicit client request may close an unpaid pending charge.
+        replacing = request.form.get("replace_pending") == "yes"
+        if replacing and replaceable_pix(original):
+            verified = refresh(db(), app, oid, now(), replace_pix=True)
+        else:
+            verified = refresh(db(), app, oid, now(), force=True)
         original = get_order(oid, person["id"])
         recent = original["checked_at"] and service.parse(
             original["checked_at"]
@@ -466,10 +518,13 @@ def install(
             or original["state"] not in ("expired", "cancelled")
             or original["error_code"]
         ):
-            flash(
-                "Consulte novamente. Só é possível gerar outro Pix após a Fast confirmar o encerramento sem pagamento.",
-                "info",
-            )
+            if original["state"] != "paid":
+                flash(
+                    "A Fast não confirmou o encerramento sem pagamento. Nenhum Pix novo foi gerado. Consulte a cobrança ou fale com o ponto se o problema continuar."
+                    if replacing
+                    else "Consulte novamente. Só é possível gerar outro Pix após a Fast confirmar o encerramento sem pagamento.",
+                    "info",
+                )
             return redirect(url_for("plans.payment", oid=oid))
         order, mode = service.reserve_order(
             db(), person, "pix", now(), settings(), retry_from=oid

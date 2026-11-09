@@ -167,6 +167,60 @@ def test_expired_plan_verified_then_retry_no_duplicates(
         assert fake.creates == initial
 
 
+@pytest.mark.parametrize(
+    "outcome", ["cancelled", "paid", "rejected", "pending", "mismatch"]
+)
+def test_replace_unusable_plan_pix(payments, monkeypatch, outcome):
+    _, client, db, fake = payments
+    customer(client)
+    url = post_purchase(client).location
+    original = dict(db.execute("SELECT * FROM plan_orders").fetchone())
+    tid = original["transaction_id"]
+    assert "Pix não funcionou" in client.get(url).text
+    cancelled = []
+
+    def cancel(transaction):
+        cancelled.append(transaction)
+        fake.records[transaction]["status"] = outcome
+
+    monkeypatch.setattr(fake, "cancel", cancel)
+    if outcome == "paid":
+        fake.records[tid]["status"] = "paid"
+    elif outcome == "mismatch":
+        fake.records[tid]["amount"] = 1
+    elif outcome == "rejected":
+
+        def rejected(_):
+            raise GatewayError(code="rejected", http_status=403)
+
+        monkeypatch.setattr(fake, "get", rejected)
+
+    form = {"csrf_token": token(client), "replace_pending": "yes"}
+    response = client.post(url + "/novo-pix", data=form)
+    if outcome == "cancelled":
+        assert response.location != url
+        assert cancelled == [tid]
+        replacement = dict(
+            db.execute(
+                "SELECT * FROM plan_orders WHERE retry_of=?", (original["id"],)
+            ).fetchone()
+        )
+        assert replacement["transaction_id"] != tid
+        assert replacement["local_method"] == "Pix Fast"
+        assert replacement["amount_cents"] == original["amount_cents"]
+        assert client.post(url + "/novo-pix", data=form).location == response.location
+        assert cancelled == [tid] and fake.creates == 2
+    else:
+        assert response.location == url
+        assert cancelled == ([tid] if outcome == "pending" else [])
+        assert fake.creates == 1
+        assert not db.execute(
+            "SELECT 1 FROM plan_orders WHERE retry_of IS NOT NULL"
+        ).fetchone()
+        if outcome == "paid":
+            assert db.execute("SELECT 1 FROM plan_cycles").fetchone()
+
+
 def test_banner_derivative_cache_original_and_private_pages(payments):
     app, client, db, _ = payments
     image = Image.new("RGB", (2048, 684), "orange")

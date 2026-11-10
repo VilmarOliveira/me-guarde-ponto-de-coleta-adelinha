@@ -1,5 +1,3 @@
-> Integração removida. As instruções de provedor deste documento são históricas e não devem ser executadas. Use [a remoção e os pagamentos locais](remocao-fast.md).
-
 # Pagamento antecipado de pacotes
 
 Cliente: **Área do Cliente → Meus pacotes → selecionar pacotes → Pagar antes da retirada**. Confere o saldo e gera o Pix Fast. QR Code, Copia e Cola, validade e consulta ficam na página própria, restrita ao titular. Créditos de plano e preços registrados no recebimento não são alterados.

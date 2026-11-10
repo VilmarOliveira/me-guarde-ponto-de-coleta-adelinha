@@ -3,7 +3,7 @@
 import pytest
 from datetime import datetime
 from test_plan import site, post_purchase
-from test_customer_payments import payments, staff, admin_form
+from test_customer_payments import payments, staff, signed, admin_form
 from test_advance_payments import customer
 from test_customization import legacy_login
 from test_app import token
@@ -21,6 +21,76 @@ def change(client, value):
     )
 
 
+def test_old_charge_retains_amount_new_renewal_uses_new_price(payments):
+    app, client, db, fake = payments
+    before = dict(
+        db.execute("SELECT terms_text,signature,accepted_at FROM clients").fetchone()
+    )
+    post_purchase(client)
+    old = dict(db.execute("SELECT * FROM plan_orders").fetchone())
+    assert old["amount_cents"] == 3390
+    assert "Mensalidade atualizada com sucesso." in change(client, "44,90").text
+    assert pricing.current(db) == 4490
+    customer(client)
+    assert post_purchase(client).location.endswith(old["id"])
+    assert (
+        dict(
+            db.execute("SELECT * FROM plan_orders WHERE id=?", (old["id"],)).fetchone()
+        )
+        == old
+    )
+    fake.records[old["transaction_id"]]["status"] = "paid"
+    assert (
+        signed(
+            client, "/webhooks/fastflow/pedidos/" + old["id"], old["transaction_id"]
+        ).status_code
+        == 200
+    )
+    cycle = dict(db.execute("SELECT * FROM plan_cycles").fetchone())
+    assert cycle["granted_at"]
+    response = post_purchase(client)
+    new = dict(
+        db.execute("SELECT * FROM plan_orders WHERE id!=?", (old["id"],)).fetchone()
+    )
+    assert new["amount_cents"] == 4490 and "R$ 44,90" in new["rules_text"]
+    assert new["rules_version"] != old["rules_version"]
+    assert fake.records[new["transaction_id"]]["amount"] == 44.9
+    fake.records[new["transaction_id"]]["status"] = "paid"
+    fake.records[new["transaction_id"]]["amount"] = 33.90
+    assert (
+        signed(
+            client, "/webhooks/fastflow/pedidos/" + new["id"], new["transaction_id"]
+        ).status_code
+        == 202
+    )
+    assert db.execute("SELECT COUNT(*) n FROM plan_cycles").fetchone()["n"] == 1
+    fake.records[new["transaction_id"]]["amount"] = 44.90
+    assert (
+        signed(
+            client, "/webhooks/fastflow/pedidos/" + new["id"], new["transaction_id"]
+        ).status_code
+        == 200
+    )
+    future = db.execute(
+        "SELECT * FROM plan_cycles WHERE order_id=?", (new["id"],)
+    ).fetchone()
+    assert future["starts_at"] == cycle["ends_at"] and not future["granted_at"]
+    assert (
+        dict(
+            db.execute(
+                "SELECT terms_text,signature,accepted_at FROM clients"
+            ).fetchone()
+        )
+        == before
+    )
+    assert "R$ 33,90" in client.get("/cliente/plano/pagamentos/" + old["id"]).text
+    assert "R$ 44,90" in client.get(response.location).text
+    assert (
+        db.execute(
+            "SELECT COUNT(*) n FROM audit_logs WHERE action=?", ("alterar_mensalidade",)
+        ).fetchone()["n"]
+        == 1
+    )
 
 
 @pytest.mark.parametrize("value", ["0", "-1", "nan", "inf", "1.234", "", "abc"])
@@ -148,6 +218,50 @@ def test_navigation_separates_public_and_internal_and_permissions(payments):
     assert pricing.current(db) == 3390
 
 
+@pytest.mark.skipif(
+    not __import__("os").environ.get("TEST_PRICE_DATABASE_URL"),
+    reason="PostgreSQL isolado para preço não configurado",
+)
+def test_postgres_migration_preserves_price_and_old_payment(payments):
+    import os
+    from app import create_app
+    from database import DatabaseConnection
+    from scripts.migrate_sqlite_to_postgres import migrate
+
+    app, client, db, fake = payments
+    post_purchase(client)
+    old = dict(db.execute("SELECT * FROM plan_orders").fetchone())
+    change(client, "39.90")
+    target = os.environ["TEST_PRICE_DATABASE_URL"]
+    migrate(app.config["DATABASE"], target)
+    migrated = create_app({**app.config, "DATABASE": target})
+    native = migrated.test_client()
+    targetdb = DatabaseConnection(target)
+    assert pricing.current(targetdb) == 3990
+    assert (
+        targetdb.execute(
+            "SELECT amount_cents FROM plan_orders WHERE id=?", (old["id"],)
+        ).fetchone()["amount_cents"]
+        == 3390
+    )
+    fake.records[old["transaction_id"]]["status"] = "paid"
+    assert (
+        signed(
+            native, "/webhooks/fastflow/pedidos/" + old["id"], old["transaction_id"]
+        ).status_code
+        == 200
+    )
+    customer(native)
+    post_purchase(native)
+    new = targetdb.execute(
+        "SELECT * FROM plan_orders WHERE id!=?", (old["id"],)
+    ).fetchone()
+    assert (
+        new["amount_cents"] == 3990
+        and fake.records[new["transaction_id"]]["amount"] == 39.9
+    )
+    assert targetdb.execute("SELECT COUNT(*) n FROM plan_cycles").fetchone()["n"] == 1
+    targetdb.close()
 
 
 @pytest.mark.parametrize("receive,withdraw", [(1, 0), (0, 1)])

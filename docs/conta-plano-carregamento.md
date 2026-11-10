@@ -1,5 +1,3 @@
-> Integração removida. As instruções de provedor deste documento são históricas e não devem ser executadas. Use [a remoção e os pagamentos locais](remocao-fast.md).
-
 # Conta, plano e carregamento — 8/11/2026
 
 Base: main após PR #62, preservando a extração de QR/validade da resposta de criação e a confirmação do encerramento pela API.

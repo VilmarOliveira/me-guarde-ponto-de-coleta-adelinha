@@ -1,3 +1,5 @@
+> Integração removida. As instruções de provedor deste documento são históricas e não devem ser executadas. Use [a remoção e os pagamentos locais](remocao-fast.md).
+
 # Economia, histórico e pagamentos do cliente
 
 ## Comparativo

@@ -92,7 +92,7 @@ def test_save_does_not_leave_selected_section_or_erase_another(payments):
     )
     assert (
         rules(db, "renewal")[0]["maximum"] == 50000
-        and rules(db, "advance")[0]["maximum"] == 100000
+        and rules(db, "advance")[0]["maximum"] == 10000000
     )
     assert (
         'href="/painel/configuracoes/pagamentos-cliente" aria-current="page">Ordem e limites'

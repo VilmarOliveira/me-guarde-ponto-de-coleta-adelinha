@@ -1,3 +1,5 @@
+> Integração removida. As instruções de provedor deste documento são históricas e não devem ser executadas. Use [a remoção e os pagamentos locais](remocao-fast.md).
+
 # Plano: ativação, renovação e cancelamento pelo administrador
 
 Acesso: **Área do Ponto → Configurações → Plano ME GUARDE Mais**. As ações exigem administrador ativo com permissão de configurações; as validações também ocorrem no servidor. Cadastro, assinatura, aceite, confirmação por e-mail e autorizações do cliente continuam obrigatórios conforme as regras existentes.

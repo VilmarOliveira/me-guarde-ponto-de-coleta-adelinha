@@ -1,87 +1,15 @@
-"""Persistent Fast reconciliation and Gmail reminders. Never creates charges."""
+"""Gmail plan reminders; no payment provider integration."""
 
 from datetime import timedelta
 from html import escape
 from types import SimpleNamespace
-from fastflow_gateway import Settings, GatewayError
+from payment_domain import LocalSettings
 import plan_service as service
-import plan_routes
-
-
-def reconcile(db, config, value, limit=12):
-    app = SimpleNamespace(config=config)
-    ready = Settings.from_config(config).ready
-    count = 0
-    pending = (
-        db.execute(
-            "SELECT * FROM plan_payment_events WHERE outcome='pending' ORDER BY id LIMIT ?",
-            (min(limit, 4),),
-        ).fetchall()
-        if ready
-        else []
-    )
-    for event in pending:
-        try:
-            data = plan_routes.gateway(app).get(event["transaction_id"])
-            service.apply_transaction(db, event["order_id"], data, value)
-            if event["event_type"] == "transaction.paid" and data["status"] != "paid":
-                continue
-            db.execute(
-                "UPDATE plan_payment_events SET outcome='processed',processed_at=?,reason=NULL WHERE id=?",
-                (service.iso(value), event["id"]),
-            )
-            db.commit()
-            count += 1
-        except GatewayError as error:
-            db.rollback()
-            db.execute(
-                "UPDATE plan_payment_events SET reason=? WHERE id=?",
-                (error.code, event["id"]),
-            )
-            if error.code in (
-                "identity_mismatch",
-                "amount_provider_mismatch",
-                "duplicate_remote",
-                "unknown_status",
-            ):
-                db.execute(
-                    "UPDATE plan_cycles SET suspended=1,review_required=1 WHERE order_id=?",
-                    (event["order_id"],),
-                )
-            db.commit()
-    # Paid orders are also rechecked periodically to recover missed refunds.
-    rows = (
-        db.execute(
-            """SELECT id FROM plan_orders WHERE
-        (method!='administrative' AND state IN ('creating','uncertain','pending','approved','under_review','cancel_requested') AND (check_after IS NULL OR check_after<=?))
-        OR (state IN ('paid','manual_approved','admin_cancelled') AND method!='administrative' AND (checked_at IS NULL OR checked_at<?))
-        ORDER BY COALESCE(checked_at,''),created_at LIMIT ?""",
-            (service.iso(value), service.iso(value - timedelta(hours=6)), limit),
-        ).fetchall()
-        if ready
-        else []
-    )
-    for row in rows:
-        count += int(plan_routes.refresh(db, app, row["id"], value))
-    if ready:
-        import pickup_payments
-
-        pickup_payments.reconcile(db, app, value)
-    for account in db.execute(
-        "SELECT DISTINCT client_id FROM plan_cycles WHERE granted_at IS NULL AND suspended=0 AND starts_at<=? AND ends_at>?",
-        (service.iso(value), service.iso(value)),
-    ).fetchall():
-        db.commit()
-        db.begin_write()
-        service.lock_account(db, account["client_id"], value)
-        service.grant_due(db, account["client_id"], value)
-        db.commit()
-    return count
 
 
 def reminders(db, config, value, send_email):
-    origin = Settings.from_config(config).origin
-    if not Settings.from_config(config).ready:
+    origin = LocalSettings.from_config(config).origin
+    if not LocalSettings.from_config(config).ready:
         return 0
     today = value.date()
     sent_count = 0

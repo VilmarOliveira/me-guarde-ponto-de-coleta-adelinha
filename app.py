@@ -165,14 +165,8 @@ def create_app(test_config=None):
         GOOGLE_LOGIN_CLIENT_ID=os.environ.get('GOOGLE_LOGIN_CLIENT_ID', ''),
         GOOGLE_LOGIN_CLIENT_SECRET=os.environ.get('GOOGLE_LOGIN_CLIENT_SECRET', ''),
         GOOGLE_LOGIN_REDIRECT_URI=os.environ.get('GOOGLE_LOGIN_REDIRECT_URI', ''),
-        FASTFLOW_ENABLED=os.environ.get('FASTFLOW_ENABLED','0'),
-        FASTFLOW_NEW_CHARGES_ENABLED=os.environ.get('FASTFLOW_NEW_CHARGES_ENABLED','1'),
-        FASTFLOW_API_KEY=os.environ.get('FASTFLOW_API_KEY',''),
-        FASTFLOW_WEBHOOK_SECRET=os.environ.get('FASTFLOW_WEBHOOK_SECRET',''),
-        FASTFLOW_PUBLIC_ORIGIN=os.environ.get('FASTFLOW_PUBLIC_ORIGIN',''),
-        FASTFLOW_CARD_ENABLED=os.environ.get('FASTFLOW_CARD_ENABLED','0'),
-        FASTFLOW_CARD_PCI_READY=os.environ.get('FASTFLOW_CARD_PCI_READY','0'),
         ME_GUARDE_MAIS_LOGO_PATH=os.environ.get('ME_GUARDE_MAIS_LOGO_PATH',''),
+        SITE_PUBLIC_ORIGIN=os.environ.get('SITE_PUBLIC_ORIGIN','https://pontodecoletaadl.servehttp.com'),
         CURRENT_DOCUMENT_BRAND=BRAND_VERSION,
         CURRENT_DOCUMENT_LOGO=int(ORIGINAL_LOGO.is_file()),
         PASSWORD_LINK_MINUTES=30,
@@ -275,8 +269,6 @@ def create_app(test_config=None):
 
     @app.before_request
     def csrf_protection():
-        if request.endpoint == "plans.webhook":
-            return None  # Raw-body HMAC replaces browser CSRF only on this callback.
         if "csrf_token" not in session:
             session["csrf_token"] = secrets.token_urlsafe(32)
         if request.method == "POST" and not secrets.compare_digest(request.form.get("csrf_token", ""), session["csrf_token"]):
@@ -341,7 +333,7 @@ def create_app(test_config=None):
 
     @app.template_filter('provider_label')
     def provider_label(value):
-        return str(value).replace('FastFlow','Fast')
+        return str(value)
 
     @app.template_filter("local_datetime")
     def local_datetime(value):
@@ -1291,8 +1283,8 @@ def create_app(test_config=None):
                     item["deadline_alert"] = "ending" if day in (3, 4) else ("late" if day >= 5 else None)
                 pending.append(item)
         area=customer_area.context(db(),client,now(),fees)
-        from fastflow_gateway import Settings
-        area.update(logo=bool(app.config.get("ME_GUARDE_MAIS_LOGO_PATH")),ready=Settings.from_config(app.config).ready,missing=plan_routes.eligible(db(),client,now()))
+        from payment_domain import LocalSettings
+        area.update(logo=bool(app.config.get("ME_GUARDE_MAIS_LOGO_PATH")),ready=LocalSettings.from_config(app.config).ready,missing=plan_routes.eligible(db(),client,now()))
         return render_template("client_area.html", **area, client=client, pending=pending, packages=packages, page=page, has_next=has_next, pending_items=pending_items, accepted_record=accepted_record, accepted_signature=signature_data(accepted_record.get("signature")))
 
     @app.route("/cliente/editar", methods=["GET", "POST"])
@@ -1878,13 +1870,12 @@ def create_app(test_config=None):
         payment_url=None
         if held:
             payment_url=url_for('pickup_payments.payment',oid=held[0]['order_id'])
-            if request.form.get('payment_method')!='Pix Fast':
-                return {'error':'Há Pix Fast reservado para esses pacotes. Consulte ou cancele antes de mudar a modalidade.','payment_url':payment_url},400
+            return {'error':'Há pagamento antecipado pendente para esses pacotes. Confirme ou cancele a solicitação antes da retirada.','payment_url':payment_url},400
         setting = db().execute("SELECT pix_receiver_name,pix_key,pix_key_type FROM settings WHERE id=1").fetchone()
         receiver = setting["pix_receiver_name"]
         payload = pix_payload(setting["pix_key"], receiver, float(final_total)) if receiver and setting["pix_key_type"]=="CNPJ" and final_total > 0 else None
         qr_data = qr_code_data_url(payload) if payload else None
-        return {"fast_available":pickup_payments.fast_available(float(final_total)),"fast_range_message":pickup_payments.FAST_RANGE_MESSAGE,"package_coverage":[{"id":p["id"],"message":plan_service.coverage_description(db(),p),"late":fees(p)["late_fee"]} for p in packages],"payment_url":payment_url,"total": float(final_total), "package_total": package_total, "surcharge_amount": float(surcharge_amount),
+        return {"package_coverage":[{"id":p["id"],"message":plan_service.coverage_description(db(),p),"late":fees(p)["late_fee"]} for p in packages],"payment_url":payment_url,"total": float(final_total), "package_total": package_total, "surcharge_amount": float(surcharge_amount),
             "original_total": float(original_total), "discount_amount": float(discount_amount),
             "package_total_display": f"R$ {package_total:.2f}".replace(".", ","),
             "surcharge_display": f"R$ {surcharge_amount:.2f}".replace(".", ","),
@@ -1943,11 +1934,8 @@ def create_app(test_config=None):
                 return redirect(url_for("dashboard"))
 
             try:
-                fast_order=None
                 snapshot=pickup_payments.quote(packages,request.form,fees)
-                if payment_method=='Pix Fast' and snapshot['final_total']>0:
-                    fast_order,snapshot=pickup_payments.final_quote(connection,request.form.get('fast_order_id',''),ids,request.form)
-                else:pickup_payments.assert_unreserved(connection,ids)
+                pickup_payments.assert_unreserved(connection,ids)
                 totals=[dict(base=p['base'],late_fee=p['late_fee'],late_days=p['late_days'],total=p['total']) for p in snapshot['packages']]
                 surcharge_amount=Decimal(str(snapshot['surcharge_amount']));surcharge_reason=snapshot['surcharge_reason'];discount_type=snapshot['discount_type'];discount_input=snapshot['discount_input'];discount_amount=Decimal(str(snapshot['discount_amount']));original_total=Decimal(str(snapshot['original_total']));final_total=Decimal(str(snapshot['final_total']))
             except ValueError as error:
@@ -1980,10 +1968,7 @@ def create_app(test_config=None):
                     (pickup_id, package["id"], total["base"], total["late_fee"], package["public_id"], owner["id"], owner["name"], owner["public_id"], package["tracking"], package["category"], package["notified_at"], total["base"], total["late_days"], total["total"]))
                 connection.execute("UPDATE pickup_packages SET prepaid_amount=? WHERE pickup_id=? AND package_id=?", (pickup_payments.prepaid(connection,package["id"])[0],pickup_id,package["id"]))
                 connection.execute("UPDATE packages SET status='retirado', picked_at=? WHERE id=?", (picked_at, package["id"]))
-            connection.execute('UPDATE pickups SET external_transaction_id=?,payment_order_id=?,payment_status=? WHERE id=?',(fast_order['transaction_id'] if fast_order else None,fast_order['id'] if fast_order else None,'paid_api' if fast_order else 'zero_total' if final_total==0 else 'paid_manual',pickup_id))
-            if fast_order:
-                connection.execute("UPDATE pickup_payment_orders SET state='delivered',delivered_at=?,pickup_id=? WHERE id=?",(picked_at,pickup_id,fast_order['id']))
-                connection.execute('DELETE FROM pickup_payment_reservations WHERE order_id=?',(fast_order['id'],))
+            connection.execute('UPDATE pickups SET external_transaction_id=?,payment_order_id=?,payment_status=? WHERE id=?',(None,None,'zero_total' if final_total==0 else 'paid_manual',pickup_id))
             connection.commit()
         except DatabaseIntegrityError:
             connection.rollback()
@@ -2245,6 +2230,8 @@ def init_db(database):
     if "active" not in table_columns(connection, "site_banners"):
         ensure_columns(connection, "site_banners", {"active": "INTEGER NOT NULL DEFAULT 1"})
         connection.execute("UPDATE site_banners SET active=0 WHERE position>3")
+    from remove_fast_data import purge
+    purge(connection)
     connection.commit()
     connection.close()
 

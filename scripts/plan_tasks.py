@@ -10,23 +10,19 @@ from app import create_app
 from core import TZ
 from database import DatabaseConnection
 from notifications import send_email
-from plan_jobs import reconcile, reminders
+from plan_jobs import reminders
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Reconciliação sem criar cobranças e lembretes do plano."
+        description="Lembretes de vencimento do plano; não cria cobranças."
     )
-    parser.add_argument("task", choices=("reconcile", "reminders"))
+    parser.add_argument("task", choices=("reminders",))
     args = parser.parse_args()
     app = create_app()
     db = DatabaseConnection(app.config["DATABASE"])
     try:
-        count = (
-            reconcile(db, app.config, datetime.now(TZ))
-            if args.task == "reconcile"
-            else reminders(db, app.config, datetime.now(TZ), send_email)
-        )
+        count = reminders(db,app.config,datetime.now(TZ),send_email)
         print(f"{args.task}: {count} registros processados.")
     except Exception:
         db.rollback()

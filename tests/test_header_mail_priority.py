@@ -9,7 +9,6 @@ from test_advance_payments import advance, customer
 from test_app import token
 from test_customization import csrf
 from test_payment_policies_history import configure, form
-from fastflow_gateway import GatewayError
 import payment_policies as policies
 
 
@@ -82,13 +81,13 @@ def test_saved_ai_first_applies_to_new_charge_in_own_flow(payments, scope):
         fake.state = "pending"
     rules = policies.rules(db, scope)
     for rule in rules:
-        rule["priority"] = {"Pix AI": 1, "Pix Fast": 2, "Dinheiro": 3}[rule["method"]]
+        rule["priority"] = {"Pix AI": 1, "Dinheiro": 2}[rule["method"]]
     staff(client)
     response = client.post(
         "/painel/configuracoes/pagamentos-cliente", data=form(client, rules, scope)
     )
     assert response.status_code == 302
-    assert policies.rules(db, scope)[1]["priority"] == 1
+    assert policies.rules(db, scope)[0]["priority"] == 1
     customer(client)
     before = fake.creates
     if scope == "advance":
@@ -112,80 +111,10 @@ def test_saved_ai_first_applies_to_new_charge_in_own_flow(payments, scope):
     assert policies.rules(db, other)[0]["priority"] == 1
 
 
-def test_existing_fast_charge_explains_why_new_ai_priority_not_used(payments):
-    _, client, db, fake = payments
-    post_purchase(client)
-    order = db.execute("SELECT * FROM plan_orders").fetchone()
-    configure(
-        db, "subscription", **{"Pix AI": {"priority": 1}, "Pix Fast": {"priority": 2}}
-    )
-    page = client.get("/cliente/plano").text
-    assert "Existe uma cobrança anterior em Pix Fast" in page
-    assert post_purchase(client).location.endswith(order["id"]) and fake.creates == 1
-    assert (
-        db.execute("SELECT local_method FROM plan_orders").fetchone()["local_method"]
-        == "Pix Fast"
-    )
 
 
-@pytest.mark.parametrize("renewal", [False, True])
-def test_fast_403_replacement_keeps_real_state_and_explains(
-    payments, monkeypatch, renewal
-):
-    _, client, db, fake = payments
-    if renewal:
-        create_cycle(db, fake, datetime.now().astimezone() - timedelta(days=5))
-        fake.state = "pending"
-    url = post_purchase(client).location
-    oid = url.rsplit("/", 1)[-1]
-
-    def denied(_):
-        raise GatewayError(code="rejected", http_status=403)
-
-    monkeypatch.setattr(fake, "get", denied)
-    before = fake.creates
-    result = client.post(
-        url + "/novo-pix",
-        data={"replace_pending": "yes", "csrf_token": token(client)},
-        follow_redirects=True,
-    )
-    assert "HTTP 403" in result.text and "Nenhum novo Pix foi gerado" in result.text
-    row = db.execute("SELECT * FROM plan_orders WHERE id=?", (oid,)).fetchone()
-    assert row["state"] == "pending" and row["error_code"] == "provider_forbidden"
-    assert fake.creates == before
 
 
-@pytest.mark.parametrize("renewal", [False, True])
-def test_explicit_replace_preserves_fast_amount_and_history(
-    payments, monkeypatch, renewal
-):
-    _, client, db, fake = payments
-    if renewal:
-        create_cycle(db, fake, datetime.now().astimezone() - timedelta(days=5))
-        fake.state = "pending"
-    url = post_purchase(client).location
-    oid = url.rsplit("/", 1)[-1]
-    row = dict(db.execute("SELECT * FROM plan_orders WHERE id=?", (oid,)).fetchone())
-    monkeypatch.setattr(
-        fake, "cancel", lambda tid: fake.records[tid].update(status="cancelled")
-    )
-    initial = fake.creates
-    data = {"replace_pending": "yes", "csrf_token": token(client)}
-    replacement = client.post(url + "/novo-pix", data=data)
-    new = db.execute("SELECT * FROM plan_orders WHERE retry_of=?", (oid,)).fetchone()
-    assert (
-        new
-        and new["local_method"] == "Pix Fast"
-        and new["amount_cents"] == row["amount_cents"]
-    )
-    assert (
-        db.execute("SELECT state FROM plan_orders WHERE id=?", (oid,)).fetchone()[
-            "state"
-        ]
-        == "cancelled"
-    )
-    assert client.post(url + "/novo-pix", data=data).location == replacement.location
-    assert fake.creates == initial + 1
 
 
 @pytest.mark.parametrize("outcome", ["accepted", "missing_id", "forbidden"])

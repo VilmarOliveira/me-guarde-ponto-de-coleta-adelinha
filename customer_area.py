@@ -3,7 +3,6 @@
 from datetime import timedelta
 from flask import request, abort
 import plan_service as plans
-from fastflow_gateway import Settings
 from client_compliance import records
 import plan_routes
 
@@ -91,7 +90,7 @@ def context(db, client, value, fees):
         future=future,
         cycles=history,
         orders=db.execute(
-            "SELECT * FROM plan_orders WHERE client_id=? ORDER BY created_at DESC LIMIT 50",
+            "SELECT * FROM plan_orders WHERE client_id=? AND state!='historical_entitlement' ORDER BY created_at DESC LIMIT 50",
             (client["id"],),
         ).fetchall(),
         ledger=db.execute(

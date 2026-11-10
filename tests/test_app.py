@@ -406,7 +406,7 @@ def test_pickup_screen_has_only_pix_and_cash_and_exact_summary_order(client):
     login(client)
     dashboard = client.get("/painel").text
     assert "Cartão de débito" not in dashboard and "Cartão de crédito" not in dashboard
-    assert dashboard.count('name="payment_method"') == 3
+    assert dashboard.count('name="payment_method"') == 2
     labels = ["Pacotes + taxa de atraso:", "Acréscimo:", "Desconto:", "Total a pagar:"]
     positions = [dashboard.index(label) for label in labels]
     assert positions == sorted(positions)

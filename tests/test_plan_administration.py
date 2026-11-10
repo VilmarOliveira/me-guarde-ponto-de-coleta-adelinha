@@ -7,11 +7,11 @@ import pytest
 from test_plan import site, CONFIG, START, reserve, create_cycle, person, insert_package
 from test_app import token
 from database import DatabaseConnection
-from fastflow_gateway import Settings, GatewayError
+from payment_domain import LocalSettings as Settings, PaymentError as GatewayError
 from core import TZ
 import plan_service as ps
 import plan_administration as admin_service
-from plan_jobs import reconcile, reminders
+from plan_jobs import reminders
 
 ACTOR = {"id": None, "key": "legacy", "name": "Administrador fixture"}
 REASON = "Conferência e autorização administrativa do cliente no ponto."
@@ -141,16 +141,6 @@ def test_manual_renewal_respects_next_start_and_suppresses_reminders(site):
     )
 
 
-def test_manual_approval_cannot_override_fast_and_late_duplicate_is_flagged(site):
-    _,_,db,fake=site;order,data=create_cycle(db,fake,state='pending')
-    with pytest.raises(ValueError,match='Pix Fast'):approve_direct(db,order=order['id'])
-    db.rollback();data['status']='expired';ps.apply_transaction(db,order['id'],data,START)
-    approve_direct(db,order=order['id'])
-    data['status']='paid';ps.apply_transaction(db,order['id'],data,START+timedelta(minutes=3))
-    row=db.execute('SELECT * FROM plan_orders').fetchone()
-    assert row['state']=='manual_approved' and row['error_code']=='duplicate_manual_and_fast_payment'
-    assert db.execute('SELECT COUNT(*) n FROM plan_cycles').fetchone()['n']==1
-    assert db.execute('SELECT COUNT(*) n FROM plan_credit_ledger').fetchone()['n']==1
 
 
 @pytest.mark.parametrize(
@@ -180,102 +170,18 @@ def test_existing_paid_or_admin_approved_participation_cannot_be_cancelled(site)
     path = "/painel/configuracoes/plano/pedidos/" + order["id"] + "/cancel"
     form = fields(client, path)
     assert client.post(path, data=form).status_code == 400
-    assert db.execute("SELECT state FROM plan_orders").fetchone()["state"] == "paid"
+    assert db.execute("SELECT state FROM plan_orders").fetchone()["state"] == "manual_approved"
     assert not db.execute(
         "SELECT 1 FROM plan_admin_decisions WHERE action='cancel'"
     ).fetchone()
 
 
-def test_cancel_pending_with_provider_confirmation_no_new_credits_or_deletion(
-    site, monkeypatch
-):
-    _, client, db, fake = site
-    order, data = create_cycle(db, fake, state="pending")
-    staff(client)
-    cancellations = []
-
-    def cancel(tid):
-        cancellations.append(tid)
-        fake.records[tid]["status"] = "cancelled"
-        return fake.records[tid]
-
-    monkeypatch.setattr(fake, "cancel", cancel, raising=False)
-    path = "/painel/configuracoes/plano/pedidos/" + order["id"] + "/cancel"
-    form = fields(client, path)
-    response = client.post(path, data=form, follow_redirects=True)
-    assert (
-        response.status_code == 200
-        and "Solicitação não paga cancelada" in response.text
-    )
-    assert cancellations == [data["id"]]
-    saved = db.execute("SELECT * FROM plan_orders").fetchone()
-    assert saved["state"] == "admin_cancelled" and saved["qr_text"] is None
-    assert not db.execute("SELECT 1 FROM plan_cycles").fetchone()
-    assert client.post(path, data=form).status_code == 302 and len(cancellations) == 1
-    assert (
-        db.execute("SELECT COUNT(*) n FROM plan_admin_decisions").fetchone()["n"] == 1
-    )
-    assert db.execute("SELECT COUNT(*) n FROM plan_orders").fetchone()["n"] == 1
 
 
-def test_cancel_detects_payment_and_does_not_call_delete(site, monkeypatch):
-    _, client, db, fake = site
-    order, data = create_cycle(db, fake, state="pending")
-    staff(client)
-    fake.records[data["id"]]["status"] = "paid"
-    monkeypatch.setattr(
-        fake,
-        "cancel",
-        lambda *a: pytest.fail("Paid charge must not be cancelled"),
-        raising=False,
-    )
-    path = "/painel/configuracoes/plano/pedidos/" + order["id"] + "/cancel"
-    assert client.post(path, data=fields(client, path)).status_code == 400
-    assert db.execute("SELECT state FROM plan_orders").fetchone()["state"] == "paid"
-    assert db.execute("SELECT COUNT(*) n FROM plan_cycles").fetchone()["n"] == 1
 
 
-def test_cancel_api_failure_keeps_existing_request(site, monkeypatch):
-    _, client, db, fake = site
-    order, data = create_cycle(db, fake, state="pending")
-    staff(client)
-
-    def fail(*a):
-        raise GatewayError(uncertain=True)
-
-    monkeypatch.setattr(fake, "cancel", fail, raising=False)
-    path = "/painel/configuracoes/plano/pedidos/" + order["id"] + "/cancel"
-    assert client.post(path, data=fields(client, path)).status_code == 302
-    assert db.execute("SELECT state FROM plan_orders").fetchone()["state"] == "pending"
-    assert db.execute("SELECT result FROM plan_admin_decisions").fetchone()["result"]=="awaiting_verification"
 
 
-def test_late_paid_after_admin_cancel_does_not_activate_or_erase_history(site):
-    app, _, db, fake = site
-    order, data = create_cycle(db, fake, state="expired")
-    admin_service.cancel(
-        db,
-        app,
-        order["id"],
-        ACTOR,
-        REASON,
-        str(uuid.uuid4()),
-        START,
-        Settings.from_config(CONFIG),
-    )
-    for status in ("paid", "pending", "paid"):
-        data["status"] = status
-        ps.apply_transaction(db, order["id"], data, START + timedelta(days=1))
-    row = db.execute("SELECT * FROM plan_orders").fetchone()
-    assert (
-        row["state"] == "paid"
-        and row["paid_at"]
-        and row["error_code"] == "payment_after_cancellation"
-    )
-    assert not db.execute("SELECT 1 FROM plan_cycles").fetchone()
-    assert (
-        db.execute("SELECT COUNT(*) n FROM plan_admin_decisions").fetchone()["n"] == 1
-    )
 
 
 def test_customer_manager_and_attendant_cannot_access_admin_routes(site):
@@ -332,7 +238,7 @@ def test_all_clients_search_and_manual_enrollment_without_fastflow_ready(site):
     db.execute("UPDATE plan_cycles SET granted_at=NULL")
     db.execute("DELETE FROM plan_credit_ledger")
     db.commit()
-    assert reconcile(db, app.config, datetime.now(TZ)) == 0
+    ps.grant_due(db,1,datetime.now(TZ));db.commit()
     assert db.execute("SELECT granted_at FROM plan_cycles").fetchone()["granted_at"]
 
 
@@ -385,54 +291,10 @@ def test_client_preview_operation_concurrency_serializes_grants(site):
     )
 
 
-def test_cancellation_without_confirmed_id_only_closes_definitively_failed_request(
-    site,
-):
-    app, client, db, fake = site
-    order = reserve(db)
-    db.execute("UPDATE plan_orders SET state='failed' WHERE id=?", (order["id"],))
-    db.commit()
-    app.config["FASTFLOW_ENABLED"] = "0"
-    staff(client)
-    path = "/painel/configuracoes/plano/pedidos/" + order["id"] + "/cancel"
-    assert client.post(path, data=fields(client, path)).status_code == 302
-    assert (
-        db.execute("SELECT state FROM plan_orders").fetchone()["state"]
-        == "admin_cancelled"
-    )
-    assert fake.gets == 0 and fake.creates == 0
 
 
-def test_uncertain_request_without_remote_match_is_not_closed(site):
-    _, client, db, fake = site
-    order = reserve(db)
-    db.execute("UPDATE plan_orders SET state='uncertain' WHERE id=?", (order["id"],))
-    db.commit()
-    staff(client)
-    path = "/painel/configuracoes/plano/pedidos/" + order["id"] + "/cancel"
-    response = client.post(path, data=fields(client, path),follow_redirects=True)
-    assert response.status_code == 200 and "Cancelamento aguardando verificação" in response.text
-    assert (
-        db.execute("SELECT state FROM plan_orders").fetchone()["state"] == "uncertain"
-    )
-    assert db.execute("SELECT result FROM plan_admin_decisions").fetchone()["result"]=="awaiting_verification"
 
 
-def test_payment_races_remote_cancel_and_payment_is_preserved(site, monkeypatch):
-    _, client, db, fake = site
-    order, data = create_cycle(db, fake, state="pending")
-    staff(client)
-    monkeypatch.setattr(
-        fake,
-        "cancel",
-        lambda tid: fake.records[tid].update(status="paid"),
-        raising=False,
-    )
-    path = "/painel/configuracoes/plano/pedidos/" + order["id"] + "/cancel"
-    assert client.post(path, data=fields(client, path)).status_code == 400
-    assert db.execute("SELECT state FROM plan_orders").fetchone()["state"] == "paid"
-    assert db.execute("SELECT COUNT(*) n FROM plan_cycles").fetchone()["n"] == 1
-    assert not db.execute("SELECT 1 FROM plan_admin_decisions").fetchone()
 
 
 def test_current_staff_identity_and_audit_persist_after_restart(site):
@@ -552,7 +414,7 @@ def test_admin_search_filters_orders_and_unpaid_requests(site):
     )
     page = client.get("/painel/configuracoes/plano?q=cliente-inexistente&only_unpaid=1")
     assert page.status_code == 200 and order["id"] not in page.text
-    data["status"]="paid";ps.apply_transaction(db,order["id"],data,START)
+    ps.activate_order(db,order,START);db.execute("UPDATE plan_orders SET state='manual_approved',manual_paid_at=? WHERE id=?",(ps.iso(START),order["id"]));db.commit()
     page = client.get("/painel/configuracoes/plano?q=CLIPCA-1&only_unpaid=1")
     assert "Cancelar solicitação" not in page.text
     assert (

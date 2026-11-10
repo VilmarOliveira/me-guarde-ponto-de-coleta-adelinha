@@ -1,0 +1,9 @@
+[Unit]
+Description=Consultar pagamentos e liberar ciclos devidos a cada minuto
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=1min
+AccuracySec=10s
+Unit=ponto-coleta-plan-reconcile.service
+[Install]
+WantedBy=timers.target

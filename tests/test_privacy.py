@@ -15,7 +15,7 @@ def test_privacy_public_truthful_notice_links_and_no_contract_changes(tmp_path):
     assert page.status_code==200
     for text in ('Política de Privacidade','AMOR INFINITO MARKETING E SOLUCOES EMPRESARIAIS','Ponto de Coleta Adelinha',
                  'mailto:pontodecoletaadelinha@gmail.com','Última atualização','3 de novembro de 2026','sessionStorage','ViaCEP',
-                 'Não há integração ativa com provedor externo','Uso Limitado','openid','email','Minuta para revisão','não oferece painel de preferências','não define um prazo único'):
+                 'Fast','não são armazenados','Uso Limitado','openid','email','Minuta para revisão','não oferece painel de preferências','não define um prazo único'):
         assert text in page.text
     assert 'name="robots" content="noindex"' in page.text
     assert 'no-store' in page.headers['Cache-Control']

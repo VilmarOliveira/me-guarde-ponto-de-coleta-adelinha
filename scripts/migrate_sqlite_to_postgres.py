@@ -34,15 +34,18 @@ TABLES = (
     "staff_recovery_codes",
     "id_sequences",
     "analytics_events",
+    "plan_api_budget",
     "plan_accounts",
     "plan_orders",
     "plan_cycles",
     "plan_credit_ledger",
+    "plan_payment_events",
     "plan_reminders",
     "plan_admin_decisions",
     "pickup_payment_orders",
     "pickup_payment_packages",
     "pickup_payment_reservations",
+    "pickup_payment_events",
     "package_prepayments",
     "customer_payment_policies",
     "preserved_plan_documents",
@@ -127,15 +130,14 @@ def migrate(source_path, database_url):
             "staff_users",
             "staff_recovery_codes",
             "plan_credit_ledger",
+            "plan_payment_events",
+            "pickup_payment_events",
         ):
             target.execute(
                 "SELECT setval(pg_get_serial_sequence(?, 'id'), COALESCE(MAX(id), 1), MAX(id) IS NOT NULL) FROM "
                 + table,
                 (table,),
             )
-        from remove_fast_data import purge
-        target.execute("DELETE FROM system_migrations WHERE name='remove_legacy_provider_v1'")
-        purge(target)
         target.commit()
     except Exception:
         target.rollback()

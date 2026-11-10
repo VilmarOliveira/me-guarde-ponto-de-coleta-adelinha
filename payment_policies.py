@@ -5,6 +5,7 @@ from decimal import Decimal, InvalidOperation
 from datetime import datetime, timedelta
 from core import TZ
 from flask import Blueprint, abort, flash, redirect, render_template, request, url_for
+from fastflow_gateway import Settings
 from core import pix_payload
 
 SCOPES = {
@@ -12,26 +13,31 @@ SCOPES = {
     "subscription": "Contratação do plano",
     "renewal": "Renovação do plano",
 }
-METHODS = ("Pix AI", "Dinheiro")
+METHODS = ("Pix Fast", "Pix AI", "Dinheiro")
 
 
 def defaults():
-    return [
+    rules = [
         dict(
-            method=method,
+            method=m,
             enabled=True,
             priority=i + 1,
-            minimum=0,
-            maximum=10000000,
+            minimum=400 if i == 0 else 0,
+            maximum=100000 if i == 0 else 10000000,
             title=(
-                "Pagar com Pix AI"
-                if method == "Pix AI"
-                else "Pagar em dinheiro no ponto"
+                "Pagar em dinheiro no ponto"
+                if i == 2
+                else "Gerar Pix Fast" if i == 0 else "Pagar com Pix AI"
             ),
-            text="Pagamento sujeito à conferência da equipe.",
+            text=(
+                "Confirmação automática pela Fast."
+                if i == 0
+                else "Pagamento sujeito à conferência da equipe."
+            ),
         )
-        for i, method in enumerate(METHODS)
+        for i, m in enumerate(METHODS)
     ]
+    return rules
 
 
 def schema(db):
@@ -49,16 +55,33 @@ def schema(db):
 def rules(db, scope):
     if scope not in SCOPES:
         raise ValueError("Tela de pagamento inválida.")
-    return json.loads(
+    items = json.loads(
         db.execute(
             "SELECT rules FROM customer_payment_policies WHERE scope=?", (scope,)
         ).fetchone()["rules"]
     )
+    if not any(rule["method"] == "Pix Fast" for rule in items):
+        # Respect the ordering chosen while the integration was unavailable.
+        fast = defaults()[0]
+        fast["priority"] = max((rule["priority"] for rule in items), default=0) + 1
+        items.append(fast)
+    return items
 
 
 def select(db, app, scope, cents, configured=None, client_id=None):
     if cents == 0:
         return {"method": "zero", "title": "Nada a pagar", "text": ""}
+    failed_fast = False
+    if client_id is not None:
+        table = "pickup_payment_orders" if scope == "advance" else "plan_orders"
+        failure = db.execute(
+            "SELECT policy_snapshot FROM "
+            + table
+            + " WHERE client_id=? AND state='failed' AND transaction_id IS NULL AND local_method='Pix Fast' AND created_at>=? ORDER BY created_at DESC LIMIT 1",
+            (client_id, (datetime.now(TZ) - timedelta(minutes=5)).isoformat()),
+        ).fetchone()
+        if failure and failure["policy_snapshot"]:
+            failed_fast = json.loads(failure["policy_snapshot"]).get("scope") == scope
     setting = db.execute(
         "SELECT pix_key,pix_key_type,pix_receiver_name FROM settings WHERE id=1"
     ).fetchone()
@@ -70,6 +93,14 @@ def select(db, app, scope, cents, configured=None, client_id=None):
             continue
         method = rule["method"]
         if method != "Dinheiro" and not rule["minimum"] <= cents <= rule["maximum"]:
+            continue
+        if method == "Pix Fast" and failed_fast:
+            continue
+        if method == "Pix Fast" and not (
+            Settings.from_config(app.config).ready
+            and Settings.from_config(app.config).new_charges_enabled
+            and 400 <= cents <= 500000
+        ):
             continue
         if method == "Pix AI" and not (
             setting["pix_key"]
@@ -134,7 +165,7 @@ def install(app, db, admin_required, current_staff):
                     title = request.form.get(f"title_{i}", "").strip()
                     text = request.form.get(f"text_{i}", "").strip()
                     if (
-                        priority not in (1, 2)
+                        priority not in (1, 2, 3)
                         or not title
                         or len(title) > 100
                         or len(text) > 1000
@@ -153,8 +184,8 @@ def install(app, db, admin_required, current_staff):
                             text=text,
                         )
                     )
-                if len(set(x["priority"] for x in items)) != len(METHODS):
-                    raise ValueError("Use prioridades diferentes: 1 e 2.")
+                if len(set(x["priority"] for x in items)) != 3:
+                    raise ValueError("Use prioridades diferentes: 1, 2 e 3.")
                 if request.form.get("action") == "preview":
                     preview = select(
                         db(),

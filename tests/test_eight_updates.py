@@ -7,8 +7,9 @@ from PIL import Image
 from core import TZ
 from test_app import token
 from test_plan import site, post_purchase, create_cycle
-from test_customer_payments import payments
+from test_customer_payments import payments, signed
 from test_advance_payments import customer
+from fastflow_gateway import GatewayError
 
 
 def test_home_login_labels_and_deferred_banners(payments):
@@ -25,7 +26,7 @@ def test_home_login_labels_and_deferred_banners(payments):
     customer(client)
     assert 'href="/cliente" data-metric="area_cliente"' in client.get("/").text
     page = client.get("/cliente?aba=plano").text
-    assert "ME GUARDE Mais" not in page and "Pagar com Pix AI" in page
+    assert "ME GUARDE Mais" not in page and "ASSINAR PLANO AGORA" in page
     assert 'fetchpriority="high"' in home and "largura=640" in home
 
 
@@ -87,8 +88,137 @@ def test_google_only_cannot_unlink(payments):
     assert "Criar senha por e-mail" in result.text
 
 
+@pytest.mark.parametrize("renewal", [False, True])
+@pytest.mark.parametrize(
+    "status", ["paid", "expired", "cancelled", "pending", "unavailable"]
+)
+def test_expired_plan_verified_then_retry_no_duplicates(
+    payments, monkeypatch, renewal, status
+):
+    _, client, db, fake = payments
+    customer(client)
+    if renewal:
+        create_cycle(db, fake, datetime.now(TZ) - timedelta(days=5))
+        fake.state = "pending"
+        assert "RENOVAR PLANO AGORA" in client.get("/cliente/plano").text
+    post_purchase(client)
+    order = dict(
+        db.execute("SELECT * FROM plan_orders WHERE state='pending'").fetchone()
+    )
+    old_cycles = db.execute("SELECT COUNT(*) n FROM plan_cycles").fetchone()["n"]
+    past = (datetime.now(TZ) - timedelta(minutes=1)).isoformat()
+    db.execute(
+        "UPDATE plan_orders SET expires_at=?,checked_at=NULL,check_after=NULL WHERE id=?",
+        (past, order["id"]),
+    )
+    db.commit()
+    if status == "unavailable":
+        monkeypatch.setattr(
+            fake, "get", lambda _: (_ for _ in ()).throw(GatewayError())
+        )
+    else:
+        fake.records[order["transaction_id"]]["status"] = status
+        fake.records[order["transaction_id"]]["qr_code_expires_at"] = past
+    url = "/cliente/plano/pagamentos/" + order["id"]
+    page = client.get(url).text
+    assert "data-plan-pix" not in page
+    if status == "paid":
+        for _ in range(2):
+            signed(
+                client,
+                "/webhooks/fastflow/pedidos/" + order["id"],
+                order["transaction_id"],
+            )
+        assert (
+            db.execute("SELECT COUNT(*) n FROM plan_cycles").fetchone()["n"]
+            == old_cycles + 1
+        )
+        assert "Gerar novo Pix" not in page
+    elif status in ("expired", "cancelled"):
+        assert "Gerar novo Pix" in page
+        # A new attempt preserves the quoted amount even if the monthly price changes.
+        db.execute("UPDATE settings SET monthly_price_cents=3990")
+        db.commit()
+        fake.records[order["transaction_id"]]["status"] = status
+        response = client.post(url + "/novo-pix", data={"csrf_token": token(client)})
+        new_id = response.location.rsplit("/", 1)[-1]
+        assert new_id != order["id"]
+        new = db.execute("SELECT * FROM plan_orders WHERE id=?", (new_id,)).fetchone()
+        assert (
+            new["root_order_id"] == order["id"]
+            and new["amount_cents"] == order["amount_cents"]
+        )
+        assert (
+            new["rules_text"] == order["rules_text"] and new["retry_of"] == order["id"]
+        )
+        assert (
+            client.post(url + "/novo-pix", data={"csrf_token": token(client)}).location
+            == response.location
+        )
+        assert fake.creates == (3 if renewal else 2)
+        assert (
+            db.execute("SELECT COUNT(*) n FROM plan_cycles").fetchone()["n"]
+            == old_cycles
+        )
+    else:
+        assert "O prazo do QR Code terminou." in page and "Gerar novo Pix" not in page
+        initial = fake.creates
+        client.post(url + "/novo-pix", data={"csrf_token": token(client)})
+        assert fake.creates == initial
 
 
+@pytest.mark.parametrize(
+    "outcome", ["cancelled", "paid", "rejected", "pending", "mismatch"]
+)
+def test_replace_unusable_plan_pix(payments, monkeypatch, outcome):
+    _, client, db, fake = payments
+    customer(client)
+    url = post_purchase(client).location
+    original = dict(db.execute("SELECT * FROM plan_orders").fetchone())
+    tid = original["transaction_id"]
+    assert "Pix não funcionou" in client.get(url).text
+    cancelled = []
+
+    def cancel(transaction):
+        cancelled.append(transaction)
+        fake.records[transaction]["status"] = outcome
+
+    monkeypatch.setattr(fake, "cancel", cancel)
+    if outcome == "paid":
+        fake.records[tid]["status"] = "paid"
+    elif outcome == "mismatch":
+        fake.records[tid]["amount"] = 1
+    elif outcome == "rejected":
+
+        def rejected(_):
+            raise GatewayError(code="rejected", http_status=403)
+
+        monkeypatch.setattr(fake, "get", rejected)
+
+    form = {"csrf_token": token(client), "replace_pending": "yes"}
+    response = client.post(url + "/novo-pix", data=form)
+    if outcome == "cancelled":
+        assert response.location != url
+        assert cancelled == [tid]
+        replacement = dict(
+            db.execute(
+                "SELECT * FROM plan_orders WHERE retry_of=?", (original["id"],)
+            ).fetchone()
+        )
+        assert replacement["transaction_id"] != tid
+        assert replacement["local_method"] == "Pix Fast"
+        assert replacement["amount_cents"] == original["amount_cents"]
+        assert client.post(url + "/novo-pix", data=form).location == response.location
+        assert cancelled == [tid] and fake.creates == 2
+    else:
+        assert response.location == url
+        assert cancelled == ([tid] if outcome == "pending" else [])
+        assert fake.creates == 1
+        assert not db.execute(
+            "SELECT 1 FROM plan_orders WHERE retry_of IS NOT NULL"
+        ).fetchone()
+        if outcome == "paid":
+            assert db.execute("SELECT 1 FROM plan_cycles").fetchone()
 
 
 def test_banner_derivative_cache_original_and_private_pages(payments):

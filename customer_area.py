@@ -3,6 +3,7 @@
 from datetime import timedelta
 from flask import request, abort
 import plan_service as plans
+from fastflow_gateway import Settings
 from client_compliance import records
 import plan_routes
 

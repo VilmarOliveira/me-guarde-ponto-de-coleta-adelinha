@@ -344,7 +344,7 @@ def cancel(db, app, order_id, actor, reason, operation_id, value, settings):
         else order["state"]
     )
     db.execute(
-        "UPDATE plan_orders SET state=?,cancel_state=?,qr_text=CASE WHEN ? THEN NULL ELSE qr_text END,error_code=?,check_after=NULL WHERE id=?",
+        "UPDATE plan_orders SET state=?,cancel_state=?,qr_text=CASE WHEN ?=1 THEN NULL ELSE qr_text END,error_code=?,check_after=NULL WHERE id=?",
         (
             state,
             "closed" if closed else "external_pending",

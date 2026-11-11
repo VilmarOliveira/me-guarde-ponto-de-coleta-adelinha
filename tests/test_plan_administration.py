@@ -558,3 +558,60 @@ def test_admin_search_filters_orders_and_unpaid_requests(site):
     assert (
         client.get("/painel/configuracoes/plano?orders_page=invalid").status_code == 400
     )
+
+
+@pytest.mark.skipif(
+    not __import__("os").environ.get("TEST_DATABASE_URL"),
+    reason="PostgreSQL isolado não configurado",
+)
+@pytest.mark.parametrize("confirmed", [True, False])
+def test_postgres_cancel_saves_confirmed_or_pending_result(site, monkeypatch, confirmed):
+    import os
+    import plan_routes
+    from app import create_app
+
+    _, _, source, fake = site
+    path = os.environ["TEST_DATABASE_URL"]
+    app = create_app({**CONFIG, "DATABASE": path})
+    db = DatabaseConnection(path)
+    try:
+        client = dict(source.execute("SELECT * FROM clients WHERE id=1").fetchone())
+        client.pop("id")
+        client["public_id"] = "cancel-fixture-" + str(uuid.uuid4())
+        client["email"] = client["public_id"] + "@example.test"
+        client["cpf"] = "11144477735"
+        client["confirmation_destination"] = client["email"]
+        columns = list(client)
+        cid = db.execute(
+            "INSERT INTO clients (" + ",".join(columns) + ") VALUES ("
+            + ",".join("?" for _ in columns) + ") RETURNING id",
+            tuple(client.values()),
+        ).fetchone()["id"]
+        db.commit()
+        owner = db.execute("SELECT * FROM clients WHERE id=?", (cid,)).fetchone()
+        settings = Settings.from_config(CONFIG)
+        order, _ = ps.reserve_order(db, owner, "pix", START, settings)
+        fake.creates = uuid.uuid4().int % 1_000_000_000
+        data = fake.create(order, owner)
+        ps.apply_transaction(db, order["id"], data, START)
+        monkeypatch.setattr(plan_routes, "gateway", lambda app: fake)
+
+        def cancel(tid):
+            if not confirmed:
+                raise GatewayError(code="rejected", http_status=403)
+            fake.records[tid]["status"] = "cancelled"
+
+        monkeypatch.setattr(fake, "cancel", cancel, raising=False)
+        admin_service.cancel(
+            db, app, order["id"], ACTOR, REASON, str(uuid.uuid4()), START, settings
+        )
+        saved = db.execute(
+            "SELECT * FROM plan_orders WHERE id=?", (order["id"],)
+        ).fetchone()
+        assert saved["cancel_state"] == ("closed" if confirmed else "external_pending")
+        assert (saved["qr_text"] is None) == confirmed
+        assert saved["state"] == ("admin_cancelled" if confirmed else "pending")
+        next_order, _ = ps.reserve_order(db, owner, "pix", START, settings)
+        assert (next_order["id"] != order["id"]) == confirmed
+    finally:
+        db.close()

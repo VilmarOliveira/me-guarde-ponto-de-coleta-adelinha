@@ -44,7 +44,7 @@ LABELS = {
     "manual_approved": "Participação validada manualmente",
     "historical_entitlement": "Participação anterior preservada",
     "cancel_requested": "Cancelamento aguardando verificação",
-    "admin_cancelled": "Solicitação cancelada pelo administrador",
+    "admin_cancelled": "Solicitação cancelada",
 }
 
 
@@ -494,6 +494,44 @@ def install(
     def payment_check(oid):
         get_order(oid, owner()["id"])
         refresh(db(), app, oid, now())
+        return redirect(url_for("plans.payment", oid=oid))
+
+    @bp.post("/cliente/plano/pagamentos/<oid>/cancelar")
+    @client_required
+    def cancel_payment(oid):
+        person = owner()
+        get_order(oid, person["id"])
+        if session.get("staff"):
+            abort(403)
+        # Ownership is enforced above. The decision identifies the customer,
+        # separately from staff decisions, using the existing cancellation flow.
+        actor = {"id": None, "key": f"client:{person['id']}", "name": person["name"]}
+        try:
+            administration.cancel(
+                db(),
+                app,
+                oid,
+                actor,
+                "Cancelamento solicitado pelo cliente na Área do Cliente.",
+                str(uuid.uuid4()),
+                now(),
+                settings(),
+            )
+        except ValueError as error:
+            db().rollback()
+            flash(str(error), "error")
+            return redirect(url_for("plans.payment", oid=oid))
+        item = get_order(oid, person["id"])
+        if item["cancel_state"] == "closed" and not item["paid_at"]:
+            flash(
+                "Cobrança cancelada. Você já pode fazer uma nova solicitação.",
+                "success",
+            )
+            return redirect(url_for("plans.client_hub"))
+        flash(
+            "A Fast ainda não confirmou o cancelamento. Consulte a cobrança novamente.",
+            "info",
+        )
         return redirect(url_for("plans.payment", oid=oid))
 
     @bp.post("/cliente/plano/pagamentos/<oid>/novo-pix")

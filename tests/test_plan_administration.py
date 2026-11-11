@@ -578,6 +578,9 @@ def test_postgres_cancel_saves_confirmed_or_pending_result(site, monkeypatch, co
         client = dict(source.execute("SELECT * FROM clients WHERE id=1").fetchone())
         client.pop("id")
         client["public_id"] = "cancel-fixture-" + str(uuid.uuid4())
+        client["email"] = client["public_id"] + "@example.test"
+        client["cpf"] = "11144477735"
+        client["confirmation_destination"] = client["email"]
         columns = list(client)
         cid = db.execute(
             "INSERT INTO clients (" + ",".join(columns) + ") VALUES ("

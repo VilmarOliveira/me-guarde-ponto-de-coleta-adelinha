@@ -1183,10 +1183,22 @@ def install(
     @staff_required
     def cancel(oid):
         permission()
+        return cancel_charge(oid)
+
+    @bp.post("/cliente/pacotes/pagamentos/<oid>/cancelar")
+    @client_required
+    def client_cancel(oid):
+        client_order(oid)
+        return cancel_charge(oid, customer=True)
+
+    def cancel_charge(oid, customer=False):
+        destination = (
+            "pickup_payments.client_payment" if customer else "pickup_payments.payment"
+        )
         item = order(oid)
         if item["state"] == "paid" or item["paid_at"]:
             flash("Pagamento confirmado: solicite análise ao administrador.", "error")
-            return redirect(url_for("pickup_payments.payment", oid=oid))
+            return redirect(url_for(destination, oid=oid))
         if item["local_method"] != "Pix Fast":
             db().commit()
             db().begin_write()
@@ -1209,7 +1221,7 @@ def install(
                 "DELETE FROM pickup_payment_reservations WHERE order_id=?", (oid,)
             )
             db().commit()
-            return redirect(url_for("pickup_payments.payment", oid=oid))
+            return redirect(url_for(destination, oid=oid))
         import plan_routes
 
         try:
@@ -1219,12 +1231,15 @@ def install(
                 if item["transaction_id"]
                 else api.find(dict(item))
             )
-            if data:
-                validate(item, data)
-                if data["status"] not in ("paid", "cancelled", "expired", "refunded"):
-                    api.cancel(data["id"])
-                    data = api.get(data["id"])
-                apply(db(), oid, data, now())
+            if not data:
+                raise GatewayError(code="awaiting_correlation")
+            validate(item, data)
+            if data["status"] not in ("paid", "cancelled", "expired", "refunded"):
+                api.cancel(data["id"])
+                data = api.get(data["id"])
+            apply(db(), oid, data, now())
+            if data["status"] not in ("paid", "cancelled", "expired", "refunded"):
+                raise GatewayError(code="cancel_awaiting_verification")
         except GatewayError as exc:
             db().rollback()
             db().execute(
@@ -1237,8 +1252,15 @@ def install(
                 + str(exc),
                 "error",
             )
-            return redirect(url_for("pickup_payments.payment", oid=oid))
+            return redirect(url_for(destination, oid=oid))
         current = order(oid)
+        if current["state"] in ("cancelled", "expired") and not current["paid_at"]:
+            flash(
+                "Cobrança encerrada. Você já pode fazer uma nova solicitação.",
+                "success",
+            )
+            if customer:
+                return redirect(url_for("client_area", aba="pacotes"))
         flash(
             (
                 "Cancelada"
@@ -1247,6 +1269,6 @@ def install(
             ),
             "info",
         )
-        return redirect(url_for("pickup_payments.payment", oid=oid))
+        return redirect(url_for(destination, oid=oid))
 
     app.register_blueprint(bp)

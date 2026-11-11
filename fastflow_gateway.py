@@ -279,7 +279,21 @@ class FastFlow:
         return data
 
     def cancel(self, identifier):
-        return self.request("DELETE", "/transactions/" + transaction_id(identifier))
+        tid = transaction_id(identifier)
+        endpoint = "/transactions/" + tid
+        try:
+            return self.request("DELETE", endpoint)
+        except GatewayError as error:
+            if error.http_status not in (400, 403, 404, 405, 422):
+                raise
+            # Both operations are documented. Recheck payment before using the
+            # status-update alternative, and let callers verify the final state.
+            current = self.get(tid)
+            if current.get("status") in ("cancelled", "expired"):
+                return current
+            if current.get("status") != "pending":
+                raise error
+            return self.request("PUT", endpoint, payload={"status": "cancelled"})
 
     def find(self, order):
         # The order-specific documented callback is the correlation identifier

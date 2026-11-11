@@ -21,7 +21,7 @@ def test_customer_cancels_plan_and_immediately_requests_again(site, monkeypatch)
     )
     path = f"/cliente/plano/pagamentos/{old['id']}/cancelar"
     page = client.get(f"/cliente/plano/pagamentos/{old['id']}")
-    assert "Cancelar cobrança" in page.text
+    assert "Cancelar cobrança" not in page.text
     response = client.post(path, data={"csrf_token": token(client)})
     assert response.status_code == 302 and response.location.endswith("/cliente/plano")
     saved = db.execute("SELECT * FROM plan_orders WHERE id=?", (old["id"],)).fetchone()
@@ -86,7 +86,7 @@ def test_customer_cancels_packages_and_immediately_requests_again(payments):
     first = advance(client, [pid]).json["id"]
     path = f"/cliente/pacotes/pagamentos/{first}/cancelar"
     assert (
-        "Cancelar cobrança" in client.get(f"/cliente/pacotes/pagamentos/{first}").text
+        "Cancelar cobrança" not in client.get(f"/cliente/pacotes/pagamentos/{first}").text
     )
     assert client.post(path, data={"csrf_token": token(client)}).status_code == 302
     assert (

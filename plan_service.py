@@ -286,7 +286,7 @@ def reserve_order(
             or original["archived_at"]
             or original["error_code"]
             or original["local_method"] != "Pix Fast"
-            or original["cancel_state"]
+            or (original["cancel_state"] and original["state"] != "expired")
         ):
             db.commit()
             return (

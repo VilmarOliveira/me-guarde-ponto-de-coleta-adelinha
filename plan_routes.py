@@ -273,7 +273,7 @@ def install(
             and not order["paid_at"]
             and not order["archived_at"]
             and not order["error_code"]
-            and not order["cancel_state"],
+            and (not order["cancel_state"] or order["state"] == "expired"),
             can_replace_pix=replaceable_pix(order),
             plan_rules=order["rules_text"],
             payment_choice=(

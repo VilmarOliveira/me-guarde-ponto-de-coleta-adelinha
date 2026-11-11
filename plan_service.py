@@ -606,7 +606,13 @@ def apply_transaction(db, order_id, data, value):
     if order["cancel_state"] in ("external_pending", "closed") and not cycle:
         if state == "paid":
             db.execute(
-                "UPDATE plan_orders SET state='paid',paid_at=COALESCE(paid_at,?),error_code='payment_after_cancellation' WHERE id=?",
+                """UPDATE plan_orders SET state=CASE WHEN EXISTS (
+                    SELECT 1 FROM plan_orders other
+                    WHERE other.client_id=plan_orders.client_id
+                    AND other.cycle_key=plan_orders.cycle_key AND other.id!=plan_orders.id
+                    AND other.state IN ('creating','uncertain','pending','approved','under_review','paid','manual_approved','cancel_requested')
+                ) THEN state ELSE 'paid' END,
+                paid_at=COALESCE(paid_at,?),error_code='payment_after_cancellation' WHERE id=?""",
                 (iso(value), order_id),
             )
         elif state == "refunded":
@@ -614,7 +620,9 @@ def apply_transaction(db, order_id, data, value):
                 "UPDATE plan_orders SET state='refunded',refunded_at=COALESCE(refunded_at,?) WHERE id=?",
                 (iso(value), order_id),
             )
-        elif not order["paid_at"]:
+        elif not order["paid_at"] and (
+            order["cancel_state"] != "closed" or state in ("cancelled", "expired")
+        ):
             db.execute(
                 "UPDATE plan_orders SET state=?,cancel_state=? WHERE id=?",
                 (

@@ -361,7 +361,8 @@ input[type=checkbox],input[type=radio]{width:22px;height:22px;min-width:22px;pad
  .public-header.nav-measuring .public-client-menu{display:none}
 }
 @media screen and (max-width:47.99rem){
- .public-header .brand{flex:1 0 100%!important;max-width:220px}
+ .public-header .brand{flex:1 0 100%!important;max-width:220px;margin-inline:auto;justify-content:center;text-align:center}
+ .public-header .brand img{object-position:center}
  .public-header.nav-compact .public-mobile-actions{width:100%;justify-content:space-between}
  .public-header.nav-compact .public-mobile-actions>a,.public-header.nav-compact .public-mobile-actions>button{flex:1 1 auto;min-width:0;min-height:44px;padding:9px 8px;font-size:14px;gap:4px;white-space:nowrap;margin:0}
  .public-header.nav-compact .public-mobile-actions .ui-icon{width:18px;height:18px;margin:0;flex:none}

@@ -176,7 +176,7 @@ def test_replace_unusable_plan_pix(payments, monkeypatch, outcome):
     url = post_purchase(client).location
     original = dict(db.execute("SELECT * FROM plan_orders").fetchone())
     tid = original["transaction_id"]
-    assert "Pix não funcionou" in client.get(url).text
+    assert "Pix não funcionou" not in client.get(url).text
     cancelled = []
 
     def cancel(transaction):
@@ -249,3 +249,22 @@ def test_banner_derivative_cache_original_and_private_pages(payments):
     customer(client)
     assert "no-store" in client.get("/cliente?aba=dados").headers["Cache-Control"]
     assert guest.get("/identidade/banner-principal?largura=9000").status_code == 400
+
+
+def test_expired_after_unsupported_cancellation_can_retry(payments, monkeypatch):
+    _, client, db, fake = payments
+    url = post_purchase(client).location
+    order = db.execute("SELECT * FROM plan_orders").fetchone()
+    db.execute(
+        "UPDATE plan_orders SET cancel_state='external_pending',check_after=NULL WHERE id=?",
+        (order["id"],),
+    )
+    db.commit()
+    fake.records[order["transaction_id"]]["status"] = "expired"
+    monkeypatch.setattr(fake, "cancel", lambda tid: pytest.fail("Expiration needs no cancellation"))
+    page = client.get(url)
+    assert "Gerar novo Pix" in page.text
+    assert "Cancelar cobrança" not in page.text and "Pix não funcionou" not in page.text
+    response = client.post(url + "/novo-pix", data={"csrf_token": token(client)})
+    assert response.status_code == 302 and response.location != url
+    assert fake.creates == 2

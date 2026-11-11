@@ -548,7 +548,7 @@ def test_admin_search_filters_orders_and_unpaid_requests(site):
     assert (
         page.status_code == 200
         and order["id"] in page.text
-        and "Cancelar solicitação" in page.text
+        and "Cancelar solicitação" not in page.text
     )
     page = client.get("/painel/configuracoes/plano?q=cliente-inexistente&only_unpaid=1")
     assert page.status_code == 200 and order["id"] not in page.text

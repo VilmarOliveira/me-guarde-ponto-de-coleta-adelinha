@@ -1,13 +1,13 @@
-{% extends 'base.html' %}{% block content %}<section class="panel-card plan-panel" {% if order.state in ('creating','uncertain','pending','approved','under_review') %}data-plan-payment="{{ url_for('pickup_payments.status',oid=order.id) }}"{% endif %}>
+{% extends 'base.html' %}{% block content %}<section class="panel-card plan-panel" data-payment-state="{{ order.state }}" {% if order.state in ('creating','uncertain','pending','approved','under_review') %}data-plan-payment="{{ url_for('pickup_payments.status',oid=order.id) }}"{% endif %}>
 <h1>Pagamento da retirada</h1>{% if order.archived_at %}<p class="notice">Cobrança arquivada · Situação: {{ labels.get(order.state,order.state) }}. O QR Code não está disponível.</p>{% endif %}{% if order.error_code=='archived_payment_review' %}<p class="flash error" role="alert">Pagamento recebido após arquivamento. Conferência administrativa necessária; nenhuma ativação ou quitação automática foi realizada.</p>{% endif %}<p>Modalidade: {{ order.local_method }}</p>{% if order.local_method in ('Pix AI','Dinheiro') and order.state=='pending' %}<form method="post" action="{{ url_for('pickup_payments.confirm_manual',oid=order.id) }}">
 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
 <label>
 <input type="checkbox" name="payment_confirmed" value="yes" required> Conferi o recebimento na modalidade indicada.</label>
 <button class="button primary">Confirmar pagamento recebido</button>
-</form>{% endif %}<p>
+</form>{% endif %}<p class="payment-total">
 <strong>R$ {{ '%.2f'|format(order.amount_cents/100)|replace('.',',') }}</strong>
 </p>
-<p data-plan-status role="status">{{ labels.get(order.state,order.state) }}</p>
+<p class="payment-status" data-plan-status role="status">{{ labels.get(order.state,order.state) }}</p>
 <details>
 <summary>Pacotes e valores</summary>{% for p in packages %}<p>{{ p.public_id }} · {{ p.tracking }} · {{ p.category }}<br>{{ package_coverage_description(p) }}<br>Taxa de atraso: R$ {{ '%.2f'|format(p.late_fee)|replace('.',',') }}</p>{% endfor %}<p>Pacotes + taxa de atraso: R$ {{ '%.2f'|format(snapshot.package_total)|replace('.',',') }}<br>Acréscimo: R$ {{ '%.2f'|format(snapshot.surcharge_amount)|replace('.',',') }}<br>Desconto: R$ {{ '%.2f'|format(snapshot.discount_amount)|replace('.',',') }}<br>Total a pagar: R$ {{ '%.2f'|format(snapshot.final_total)|replace('.',',') }}</p>
 <p>Os valores desta cobrança ficam reservados. Não altere pacotes, modalidade ou ajustes enquanto houver cobrança em aberto; a entrega física só é registrada ao confirmar abaixo.</p>

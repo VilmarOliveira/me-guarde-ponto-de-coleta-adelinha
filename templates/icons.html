@@ -1,6 +1,10 @@
 {% macro icon(name) -%}
 <svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-{% if name=='tag' %}<path d="M3 4h8l10 10-7 7L3 10V4Z"/><circle cx="7" cy="8" r="1"/>
+{% if name=='copy' %}<rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 4H5a2 2 0 0 0-2 2v11"/>
+{% elif name=='refresh' %}<path d="M20 7v5h-5M4 17v-5h5"/><path d="M6 6a8 8 0 0 1 14 6M4 12a8 8 0 0 0 14 6"/>
+{% elif name=='search' %}<circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/>
+{% elif name=='arrow-right' %}<path d="M4 12h16m-6-6 6 6-6 6"/>
+{% elif name=='tag' %}<path d="M3 4h8l10 10-7 7L3 10V4Z"/><circle cx="7" cy="8" r="1"/>
 {% elif name=='check-circle' %}<circle cx="12" cy="12" r="9"/><path d="m7 12 3 3 7-7"/>
 {% elif name=='exchange' %}<path d="M3 7h17m-4-4 4 4-4 4M21 17H4m4-4-4 4 4 4"/>
 {% elif name=='monitor' %}<rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/>

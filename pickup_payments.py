@@ -394,13 +394,8 @@ def refresh(db, app, oid, value):
         # browser timer or webhook status alone. Later payments remain subject
         # to apply()'s late_payment_review protection.
         validate(order, data)
-        if data.get("status") == "pending":
-            expires = ps.safe_time(data.get("qr_code_expires_at"))
-            same_qr = not data.get("qr_code_text") or data["qr_code_text"] == order["qr_text"]
-            if not expires and not data.get("qr_code_expires_at") and same_qr:
-                expires = ps.safe_time(order["expires_at"])
-            if expires and ps.parse(expires) <= value:
-                data = {**data, "status": "expired"}
+        if ps.verified_pix_expired(order, data, value):
+            data = {**data, "status": "expired"}
         apply(db, oid, data, value)
         return True
     except (GatewayError, DatabaseIntegrityError) as e:

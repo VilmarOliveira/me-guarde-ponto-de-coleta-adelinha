@@ -17,8 +17,12 @@ cobrança recebe `late_payment_review`, sem quitar automaticamente os pacotes
 nem interferir na reserva de uma cobrança nova. As consultas continuam sujeitas
 ao intervalo existente de 20 segundos para evitar chamadas simultâneas.
 
-Escopo: pagamentos de pacotes, incluindo pagamento antecipado e balcão.
-As regras de contratação e renovação de planos permanecem iguais.
+Escopo: pagamentos de pacotes, incluindo pagamento antecipado e balcão, e
+Pix de contratação/renovação do plano. Todos consultam a API antes de encerrar
+localmente um QR Code vencido. A nova tentativa do plano preserva o histórico,
+o vínculo com a cobrança anterior e o valor da tentativa original. Pagamentos
+tardios do plano recebem `payment_after_cancellation` para análise, sem ativar
+um ciclo ou conceder créditos automaticamente.
 
 Validação automatizada: renovação com API ainda pendente, botão e conferência
 do cliente, reutilização da nova cobrança, resposta paga, pagamento tardio,

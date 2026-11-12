@@ -154,7 +154,7 @@ def refresh(db, app, order_id, value, *, force=False, replace_pix=False):
             db.commit()
             api.cancel(tid)
             data = api.get(tid)
-        service.apply_transaction(db, order_id, data, value)
+        service.apply_transaction(db, order_id, data, value, expire_pending_pix=True)
         return True
     except (GatewayError, DatabaseIntegrityError) as error:
         code = (

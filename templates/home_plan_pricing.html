@@ -20,8 +20,8 @@
 <div class="payment-or" aria-hidden="true"><span>OU</span></div>
 <h3 class="payment-section-label"><span>POR PACOTE</span></h3>
 <div class="single-package-prices">
-<article>{{ icon('box') }}<div><h4>Pequeno</h4><p class="single-package-value"><strong>R$ {{ '%.2f'|format(offer.small_price)|replace('.',',') }}</strong> por pacote</p><p>Soma de comprimento + largura + altura até {{ offer.small_sum }} cm e peso até {{ offer.small_weight }} kg.</p></div></article>
-<article>{{ icon('box') }}<div><h4>Grande</h4><p class="single-package-value"><strong>R$ {{ '%.2f'|format(offer.large_price)|replace('.',',') }}</strong> por pacote</p><p>Soma de comprimento + largura + altura até {{ offer.large_sum }} cm e peso até {{ offer.large_weight }} kg.</p></div></article>
+<article class="package-price-small">{{ icon('parcel-small') }}<div><h4>Pequeno</h4><p class="single-package-value"><strong>R$ {{ '%.2f'|format(offer.small_price)|replace('.',',') }}</strong> por pacote</p><p>Soma de comprimento + largura + altura até {{ offer.small_sum }} cm e peso até {{ offer.small_weight }} kg.</p></div></article>
+<article class="package-price-large">{{ icon('parcel-large') }}<div><h4>Grande</h4><p class="single-package-value"><strong>R$ {{ '%.2f'|format(offer.large_price)|replace('.',',') }}</strong> por pacote</p><p>Soma de comprimento + largura + altura até {{ offer.large_sum }} cm e peso até {{ offer.large_weight }} kg.</p></div></article>
 </div><p class="package-limits-note">Tanto a soma das medidas quanto o peso devem respeitar os limites da categoria.</p>
 <p class="payment-at-pickup">{{ icon('payment') }} <strong>Pagamento avulso na retirada.</strong></p>
 </section>

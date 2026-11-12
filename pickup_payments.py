@@ -113,7 +113,9 @@ def schema(db, id_type, ensure):
     ensure(db, "settings", {"monthly_price_cents": "INTEGER NOT NULL DEFAULT 3390"})
     for table in ("plan_orders", "pickup_payment_orders"):
         ensure(db, table, {"archived_at": "TEXT", "archived_by": "TEXT"})
-    ensure(db, "pickup_payment_orders", {"cancel_state": "TEXT"})
+    ensure(db, "pickup_payment_orders", {"cancel_state": "TEXT", "superseded_at": "TEXT", "superseded_by": "TEXT"})
+    db.execute("CREATE INDEX IF NOT EXISTS pickup_payment_successor ON pickup_payment_orders(superseded_by)")
+    db.execute("CREATE INDEX IF NOT EXISTS pickup_payment_packages_package ON pickup_payment_packages(package_id)")
     ensure(db, "pickup_packages", {"prepaid_amount": "REAL"})
     db.execute("""CREATE TABLE IF NOT EXISTS package_prepayments (
         order_id TEXT NOT NULL REFERENCES pickup_payment_orders(id),
@@ -280,7 +282,7 @@ def apply(db, oid, data, value):
     if other:
         raise GatewayError(code="identity_mismatch")
     db.execute(
-        "UPDATE pickup_payment_orders SET transaction_id=?,checked_at=?,check_after=?,qr_text=COALESCE(?,qr_text),expires_at=CASE WHEN ?=1 THEN ? ELSE expires_at END,error_code=CASE WHEN error_code IN ('late_payment_review','archived_payment_review') THEN error_code ELSE NULL END WHERE id=?",
+        "UPDATE pickup_payment_orders SET transaction_id=?,checked_at=?,check_after=?,qr_text=COALESCE(?,qr_text),expires_at=CASE WHEN ?=1 THEN ? ELSE expires_at END,error_code=CASE WHEN error_code IN ('late_payment_review','archived_payment_review','superseded_payment_review','prior_payment_review') THEN error_code ELSE NULL END WHERE id=?",
         (
             tid,
             ps.iso(value),
@@ -301,6 +303,19 @@ def apply(db, oid, data, value):
             oid,
         ),
     )
+    if order["superseded_at"]:
+        if state == "paid":
+            db.execute("UPDATE pickup_payment_orders SET state='paid',paid_at=COALESCE(paid_at,?),error_code='superseded_payment_review' WHERE id=?", (ps.iso(value), oid))
+            quarantine_replacements(db, order)
+        elif state in ("expired", "cancelled", "refunded") and not order["paid_at"]:
+            db.execute("UPDATE pickup_payment_orders SET state=? WHERE id=?", (state, oid))
+        db.commit()
+        return
+    if order["error_code"] == "prior_payment_review":
+        if state == "paid":
+            db.execute("UPDATE pickup_payment_orders SET state='paid',paid_at=COALESCE(paid_at,?) WHERE id=?", (ps.iso(value), oid))
+        db.commit()
+        return
     if order["archived_at"] and state == "paid" and not order["paid_at"]:
         db.execute(
             "UPDATE pickup_payment_orders SET state='paid',paid_at=?,error_code='archived_payment_review' WHERE id=?",
@@ -471,7 +486,95 @@ def webhook(db, app, rid, tid, event, raw, value):
         return "", 202
 
 
+REVIEW_CODES = ("superseded_payment_review", "prior_payment_review")
+
+
+def assert_no_group_review(db, ids):
+    marks = ",".join("?" for _ in ids)
+    if db.execute(
+        f"SELECT 1 FROM pickup_payment_packages p JOIN pickup_payment_orders o ON o.id=p.order_id WHERE p.package_id IN ({marks}) AND o.error_code IN ('superseded_payment_review','prior_payment_review') LIMIT 1",
+        tuple(ids),
+    ).fetchone():
+        raise ValueError("Pagamento recebido em uma cobrança anterior. Procure o ponto para conferir o saldo antes de gerar outro Pix.")
+
+
+def replacement_sources(db, ids, value):
+    """Called again while the selected package rows are locked."""
+    assert_no_group_review(db, ids)
+    marks = ",".join("?" for _ in ids)
+    rows = db.execute(
+        f"SELECT DISTINCT o.* FROM pickup_payment_orders o JOIN pickup_payment_reservations r ON r.order_id=o.id WHERE r.package_id IN ({marks})",
+        tuple(ids),
+    ).fetchall()
+    for row in rows:
+        previous_quote = json.loads(row["snapshot"])
+        covered = {p["id"] for p in previous_quote["packages"]}
+        if previous_quote.get("surcharge_amount") or previous_quote.get("discount_amount"):
+            raise ValueError("Esta cobrança tem ajuste da equipe. Procure o ponto para agrupar sem alterar o valor combinado.")
+        if not covered.issubset(ids):
+            raise ValueError("Selecione todos os pacotes da cobrança anterior para agrupá-los.")
+        if (row["local_method"] != "Pix Fast" or row["state"] != "pending"
+            or not row["transaction_id"] or row["paid_at"] or row["error_code"]
+            or row["archived_at"] or row["superseded_at"]
+            or not row["checked_at"] or ps.parse(row["checked_at"]) < value - timedelta(seconds=20)):
+            raise ValueError("Consulte a cobrança existente. O pagamento ainda não permite agrupamento.")
+    return rows
+
+
+def refresh_selected(db, app, ids, value):
+    marks = ",".join("?" for _ in ids)
+    rows = db.execute(
+        f"SELECT DISTINCT o.id FROM pickup_payment_orders o JOIN pickup_payment_reservations r ON r.order_id=o.id WHERE r.package_id IN ({marks}) AND o.local_method='Pix Fast'",
+        tuple(ids),
+    ).fetchall()
+    for row in rows:
+        refresh_ancestors(db, app, row["id"], value)
+        refresh(db, app, row["id"], value)
+        paid = db.execute("SELECT * FROM pickup_payment_orders WHERE id=?", (row["id"],)).fetchone()
+        covered = {p["id"] for p in json.loads(paid["snapshot"])["packages"]}
+        if covered != set(ids) and paid["state"] == "paid" and not paid["advance"] and not paid["delivered_at"] and not paid["error_code"] and not paid["superseded_at"]:
+            db.commit()
+            db.begin_write()
+            db.execute("SELECT id FROM packages WHERE id IN (SELECT package_id FROM pickup_payment_packages WHERE order_id=?) ORDER BY id" + (" FOR UPDATE" if db.postgres else ""), (paid["id"],)).fetchall()
+            paid = db.execute("SELECT * FROM pickup_payment_orders WHERE id=?", (paid["id"],)).fetchone()
+            if paid["state"] == "paid" and not paid["delivered_at"] and not paid["error_code"] and not paid["superseded_at"]:
+                db.execute("UPDATE pickup_payment_orders SET advance=1 WHERE id=?", (paid["id"],))
+                settle_advance(db, paid, value)
+            db.commit()
+    assert_no_group_review(db, ids)
+
+
+def refresh_ancestors(db, app, oid, value, visited=None):
+    visited = set() if visited is None else visited
+    if oid in visited:
+        return
+    visited.add(oid)
+    for parent in db.execute("SELECT id FROM pickup_payment_orders WHERE superseded_by=?", (oid,)).fetchall():
+        refresh_ancestors(db, app, parent["id"], value, visited)
+        refresh(db, app, parent["id"], value)
+
+
+def quarantine_replacements(db, order):
+    target, seen = order["superseded_by"], set()
+    while target and target not in seen:
+        seen.add(target)
+        row = db.execute("SELECT superseded_by FROM pickup_payment_orders WHERE id=?", (target,)).fetchone()
+        db.execute("UPDATE pickup_payment_orders SET error_code='prior_payment_review' WHERE id=?", (target,))
+        target = row["superseded_by"] if row else None
+
+
+def restore_replacements(db, oid):
+    parents = db.execute("SELECT * FROM pickup_payment_orders WHERE superseded_by=?", (oid,)).fetchall()
+    if parents and any(p["paid_at"] or p["error_code"] or p["state"] != "pending" for p in parents):
+        return
+    db.execute("DELETE FROM pickup_payment_reservations WHERE order_id=?", (oid,))
+    for parent in parents:
+        db.execute("UPDATE pickup_payment_orders SET superseded_at=NULL,superseded_by=NULL WHERE id=?", (parent["id"],))
+        db.execute("INSERT INTO pickup_payment_reservations(package_id,order_id) SELECT package_id,order_id FROM pickup_payment_packages WHERE order_id=? ON CONFLICT DO NOTHING", (parent["id"],))
+
+
 def assert_unreserved(db, ids, allowed=None):
+    assert_no_group_review(db, ids)
     marks = ",".join("?" for _ in ids)
     if db.execute(
         "SELECT 1 FROM package_prepayments a JOIN pickup_payment_orders o ON o.id=a.order_id WHERE a.package_id IN ("
@@ -505,6 +608,7 @@ def reserve(
     reprice=None,
     selector=None,
     required_method=None,
+    replace_existing=False,
 ):
     cents = round(snapshot["final_total"] * 100)
     if len({p["client_id"] for p in packages}) != 1:
@@ -524,6 +628,8 @@ def reserve(
         p["status"] != "aguardando_retirada" for p in locked
     ):
         raise ValueError("Há pacote indisponível para retirada.")
+    assert_no_group_review(db, ids)
+    replacements = []
     old = db.execute(
         f"SELECT DISTINCT order_id FROM pickup_payment_reservations WHERE package_id IN ({marks})",
         tuple(ids),
@@ -560,9 +666,10 @@ def reserve(
                     settle_advance(db, order, value)
                 db.commit()
                 return order, False
-        raise ValueError(
-            "Pacotes já vinculados a outra cobrança. Mantenha os valores e a modalidade até a conclusão ou cancelamento."
-        )
+        if replace_existing:
+            replacements = replacement_sources(db, ids, value)
+        else:
+            raise ValueError("Pacotes já vinculados a outra cobrança. Consulte o Pix existente.")
     if reprice:
         snapshot = reprice(locked)
         cents = round(snapshot["final_total"] * 100)
@@ -577,6 +684,8 @@ def reserve(
     elif not fast_available(snapshot["final_total"]):
         raise ValueError(FAST_RANGE_MESSAGE)
     is_fast = not selected or selected["method"] == "Pix Fast"
+    if replacements and not is_fast:
+        raise ValueError("O agrupamento precisa gerar Pix Fast. Confira a configuração no ponto.")
     if is_fast:
         db.execute(
             "SELECT id FROM plan_gateway_lock WHERE id=1"
@@ -632,6 +741,9 @@ def reserve(
                 oid,
             ),
         )
+    for previous in replacements:
+        db.execute("UPDATE pickup_payment_orders SET superseded_at=?,superseded_by=? WHERE id=?", (ps.iso(value), oid, previous["id"]))
+        db.execute("DELETE FROM pickup_payment_reservations WHERE order_id=?", (previous["id"],))
     for pid in ids:
         db.execute(
             "INSERT INTO pickup_payment_packages(order_id,package_id) VALUES(?,?)",
@@ -799,6 +911,7 @@ def install(
             if client_id is not None and any(p["client_id"] != client_id for p in rows):
                 abort(404)
             retry_id = retry_source(ids) if client_id is not None else None
+            combine = client_id is not None and request.form.get("combine_pix") == "1"
             form = {} if client_id is not None else request.form
             snapshot = quote(rows, form, fees)
             cfg = Settings.from_config(app.config)
@@ -833,7 +946,10 @@ def install(
                     )
                 return fresh
 
-            refresh_ended_reservations(db(), app, ids, now())
+            if client_id is not None:
+                refresh_selected(db(), app, ids, now())
+            else:
+                refresh_ended_reservations(db(), app, ids, now())
             item, new = reserve(
                 db(),
                 rows,
@@ -846,11 +962,12 @@ def install(
                 now(),
                 cfg,
                 advance=advance,
-                required_method="Pix Fast" if retry_id else None,
+                required_method="Pix Fast" if retry_id or combine else None,
+                replace_existing=combine,
                 reprice=reprice,
                 selector=(
                     (
-                        lambda cents: advance_choice(cents, rows[0]["client_id"], retry_id)
+                        lambda cents: advance_choice(cents, rows[0]["client_id"], retry_id or combine)
                     )
                     if advance
                     else None
@@ -897,10 +1014,7 @@ def install(
                         (state, getattr(e, "code", "database_conflict"), item["id"]),
                     )
                     if state == "failed":
-                        db().execute(
-                            "DELETE FROM pickup_payment_reservations WHERE order_id=?",
-                            (item["id"],),
-                        )
+                        restore_replacements(db(), item["id"])
                     db().commit()
             return {
                 "id": item["id"],
@@ -935,6 +1049,8 @@ def install(
         return create_charge(client_id=session["client_id"], advance=True)
 
     def advance_label(item):
+        if item["error_code"] in REVIEW_CODES:
+            return "Pagamento em conferência"
         if item["state"] == "paid" and not item["error_code"]:
             waiting = (
                 db()
@@ -965,7 +1081,10 @@ def install(
     @bp.route("/cliente/pacotes/pagamentos/<oid>", methods=["GET", "POST"])
     @client_required
     def client_payment(oid):
-        client_order(oid)
+        item = client_order(oid)
+        if item["superseded_by"]:
+            return redirect(url_for("pickup_payments.client_payment", oid=item["superseded_by"]))
+        refresh_ancestors(db(), app, oid, now())
         refresh(db(), app, oid, now())
         item = client_order(oid)
         return render_template(
@@ -988,7 +1107,10 @@ def install(
     @bp.get("/cliente/pacotes/pagamentos/<oid>/status")
     @client_required
     def client_payment_status(oid):
-        client_order(oid)
+        item = client_order(oid)
+        if item["superseded_by"]:
+            return {"state": "superseded", "label": "Cobrança substituída", "done": True, "pix_available": False}
+        refresh_ancestors(db(), app, oid, now())
         refresh(db(), app, oid, now())
         item = client_order(oid)
         return {
@@ -1019,7 +1141,7 @@ def install(
             if len(rows) != len(ids):
                 abort(404)
             retry_id = retry_source(ids)
-            refresh_ended_reservations(db(), app, ids, now())
+            refresh_selected(db(), app, ids, now())
             held = (
                 db()
                 .execute(
@@ -1030,6 +1152,7 @@ def install(
                 )
                 .fetchall()
             )
+            combine = False
             if held:
                 if len(held) == 1:
                     old = client_order(held[0]["order_id"])
@@ -1063,16 +1186,16 @@ def install(
                         return redirect(
                             url_for("pickup_payments.client_payment", oid=old["id"])
                         )
-                raise ValueError(
-                    "Pacotes já vinculados a outro Pix pendente. Consulte a cobrança existente."
-                )
+                replacement_sources(db(), ids, now())
+                combine = True
             snap = quote(rows, {}, fees)
-            choice = advance_choice(round(snap["final_total"] * 100), session["client_id"], retry_id)
+            choice = advance_choice(round(snap["final_total"] * 100), session["client_id"], retry_id or combine)
             return render_template(
                 "advance_review.html",
                 snapshot=snap,
                 choice=choice,
                 retry_order_id=retry_id,
+                combine_pix=combine,
                 allowed=snap["final_total"] > 0 and choice is not None,
                 range_message=FAST_RANGE_MESSAGE,
             )
@@ -1128,7 +1251,10 @@ def install(
     @staff_required
     def payment(oid):
         permission()
-        order(oid)
+        item = order(oid)
+        if item["superseded_by"]:
+            return redirect(url_for("pickup_payments.payment", oid=item["superseded_by"]))
+        refresh_ancestors(db(), app, oid, now())
         refresh(db(), app, oid, now())
         item = order(oid)
         snap = json.loads(item["snapshot"])
@@ -1149,7 +1275,10 @@ def install(
     @staff_required
     def status(oid):
         permission()
-        order(oid)
+        item = order(oid)
+        if item["superseded_by"]:
+            return {"state":"superseded", "label":"Cobrança substituída", "done":True, "pix_available":False}
+        refresh_ancestors(db(), app, oid, now())
         refresh(db(), app, oid, now())
         item = order(oid)
         return {

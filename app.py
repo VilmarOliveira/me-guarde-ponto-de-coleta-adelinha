@@ -37,7 +37,7 @@ from core import (
 )
 from database import DatabaseConnection, DatabaseIntegrityError, is_postgres
 from receipt_pdf import build_receipt_pdf
-from notifications import notification_config_status, send_code
+from notifications import notification_config_status, send_code, gmail_authorization_status
 from contract import CONTRACT_TEXT, CONTRACT_VERSION, CONTRACT_LABEL
 from privacy_policy import PRIVACY_UPDATED, PRIVACY_CONTACT as PRIVACY_EMAIL, PRIVACY_REVIEW_PENDING
 from client_compliance import FIELDS as CONTRACT_FIELDS, compliance, effective_record, signature_data, revision_id
@@ -1547,9 +1547,18 @@ def create_app(test_config=None):
             return redirect(url_for("dashboard"))
         return redirect(url_for("staff_client", client_id=client_id))
 
-    @app.get("/painel/configuracoes/notificacoes")
+    @app.route("/painel/configuracoes/notificacoes", methods=["GET", "POST"])
     @admin_required
     def notification_settings():
+        if request.method == "POST":
+            checked = session.get("gmail_authorization_checked_at")
+            if checked and now() - datetime.fromisoformat(checked) < timedelta(seconds=30):
+                flash("Aguarde 30 segundos antes de testar a autorização novamente.", "error")
+            else:
+                session["gmail_authorization_checked_at"] = now().isoformat()
+                ok, detail = gmail_authorization_status()
+                flash(detail, "success" if ok else "error")
+            return redirect(url_for("notification_settings"))
         records = db().execute("SELECT channel,destination,provider_status,created_at FROM verification_codes ORDER BY id DESC LIMIT 50").fetchall()
         safe_records = [{"channel": row["channel"], "destination": mask_contact(row["channel"], row["destination"]),
                          "provider_status": row["provider_status"] or "Não registrado", "created_at": row["created_at"]}
@@ -2284,7 +2293,7 @@ def ensure_columns(connection, table, definitions):
 
 def table_columns(connection, table):
     if connection.postgres:
-        rows = connection.execute("SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name=?", (table,)).fetchall()
+        rows = connection.execute("SELECT attname AS column_name FROM pg_attribute WHERE attrelid=to_regclass(?) AND attnum>0 AND NOT attisdropped", (table,)).fetchall()
         return {row["column_name"] for row in rows}
     return {row[1] for row in connection.execute(f"PRAGMA table_info({table})")}
 

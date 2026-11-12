@@ -8,9 +8,10 @@
     [/copiar/i, 'copy'], [/consultar|verificar|atualizar/i, 'refresh'],
     [/comprovante|baixar|download/i, 'download'], [/voltar|anterior/i, 'back'],
     [/pix/i, 'pix'], [/dinheiro/i, 'wallet'],
+    [/^Aguardando retirada$/i, 'parcel-waiting'], [/^Pacotes retirados$/i, 'parcel-collected'],
     [/retir|entreg/i, 'pickup'], [/pacote|encomenda/i, 'box'],
     [/plano|crédito/i, 'wallet'], [/cadast|adicionar cliente/i, 'user-plus'],
-    [/login|entrar|senha|acesso/i, 'key'], [/cliente|meus dados|quem retira|olá/i, 'person'],
+    [/login|entrar/i, 'login'], [/senha|acesso/i, 'key'], [/cliente|meus dados|quem retira|olá/i, 'person'],
     [/configura|preferência/i, 'settings'], [/histórico|pagamento|cobrança/i, 'payment'],
     [/salvar|gravar/i, 'save'], [/confirmar|concluir|aceitar/i, 'check-circle'],
     [/editar|alterar/i, 'edit'], [/excluir|remover/i, 'trash'],
@@ -20,6 +21,12 @@
     [/métrica|indicador|painel/i, 'chart'], [/continuar|próximo/i, 'arrow-right'],
   ];
   function decorate(element, fallback) {
+    if (element.closest('.article-body, .terms-text, [contenteditable]')) return;
+    if (/voltar|anterior/i.test(element.textContent)) {
+      const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+      let text;
+      while ((text = walker.nextNode())) text.textContent = text.textContent.replace(/[←⬅➜]+\s*/gu, '');
+    }
     if (element.querySelector('.ui-icon, img, svg') || element.closest('.article-body, .terms-text, [contenteditable]')) return;
     const label = element.textContent.trim();
     if (!label) return;

@@ -9,7 +9,7 @@
 
 ## Pix agrupado
 
-O cliente seleciona os pacotes e confere o saldo antes de confirmar. O servidor consulta as cobranças anteriores, desconta pagamentos já confirmados e recalcula o total sob bloqueio dos registros. Cobranças iguais são reutilizadas. Quando a seleção inclui outros pacotes, o formulário oferece um Pix único. É necessário incluir todos os pacotes de qualquer cobrança anterior envolvida.
+O cliente seleciona os pacotes e confere o saldo antes de confirmar. O servidor consulta as cobranças anteriores, desconta pagamentos já confirmados e recalcula o total sob bloqueio dos registros. Cobranças iguais são reutilizadas. Quando a seleção inclui outros pacotes, o formulário oferece um Pix único. É necessário incluir todos os pacotes de qualquer cobrança anterior envolvida. Cobranças pendentes com acréscimo ou desconto manual exigem conferência da equipe, para não perder o ajuste ao agrupar.
 
 A nova cobrança e a transferência das reservas são registradas atomicamente. As anteriores ficam marcadas como substituídas, conservando QR, valor, transação e histórico; seus links apontam para a cobrança atual. O código anterior não é cancelado na Fast e ainda pode ser pago por quem já o copiou.
 

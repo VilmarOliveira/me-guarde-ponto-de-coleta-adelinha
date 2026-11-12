@@ -507,7 +507,10 @@ def replacement_sources(db, ids, value):
         tuple(ids),
     ).fetchall()
     for row in rows:
-        covered = {p["id"] for p in json.loads(row["snapshot"])["packages"]}
+        previous_quote = json.loads(row["snapshot"])
+        covered = {p["id"] for p in previous_quote["packages"]}
+        if previous_quote.get("surcharge_amount") or previous_quote.get("discount_amount"):
+            raise ValueError("Esta cobrança tem ajuste da equipe. Procure o ponto para agrupar sem alterar o valor combinado.")
         if not covered.issubset(ids):
             raise ValueError("Selecione todos os pacotes da cobrança anterior para agrupá-los.")
         if (row["local_method"] != "Pix Fast" or row["state"] != "pending"

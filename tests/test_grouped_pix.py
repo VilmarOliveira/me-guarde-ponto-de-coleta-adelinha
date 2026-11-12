@@ -238,3 +238,16 @@ def test_database_error_rolls_back_replacement_without_losing_old_pix(payments, 
     assert db.execute('SELECT COUNT(*) n FROM pickup_payment_orders').fetchone()['n'] == 1
     assert db.execute('SELECT superseded_by FROM pickup_payment_orders WHERE id=?', (old['id'],)).fetchone()['superseded_by'] is None
     assert db.execute('SELECT order_id FROM pickup_payment_reservations').fetchone()['order_id'] == old['id']
+
+
+@pytest.mark.parametrize('adjustment', [{'surcharge_amount':'2.00','surcharge_reason':'Ajuste confirmado pela equipe'}, {'discount_amount':'0.90'}])
+def test_pending_manual_adjustments_are_not_discarded_by_grouping(payments, adjustment):
+    _, client, db, fake = payments
+    ids = [package(db, number=i) for i in (1,2)]
+    staff(client)
+    old = create_pickup(client, ids[:1], **adjustment).json
+    customer(client)
+    result = create(client, ids, True)
+    assert result.status_code == 400 and 'ajuste da equipe' in result.json['error']
+    assert fake.creates == 1
+    assert db.execute('SELECT superseded_by FROM pickup_payment_orders WHERE id=?', (old['id'],)).fetchone()['superseded_by'] is None

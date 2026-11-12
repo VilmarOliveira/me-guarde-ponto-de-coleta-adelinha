@@ -13,7 +13,7 @@
 <button class="button ghost">Consultar pagamento</button>
 </form>
 <p>Retire no ponto com documento. Novas diárias são cobradas na retirada.</p>{% if order.state=='expired' and not order.paid_at and not order.error_code %}<form method="post" action="{{ url_for('pickup_payments.client_review') }}">
-<input type="hidden" name="csrf_token" value="{{ csrf_token }}">{% for p in snapshot.packages %}<input type="hidden" name="package_ids" value="{{ p.id }}">{% endfor %}<button class="button primary">Gerar novo Pix</button>
+<input type="hidden" name="retry_order_id" value="{{ order.id }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}">{% for p in snapshot.packages %}<input type="hidden" name="package_ids" value="{{ p.id }}">{% endfor %}<button class="button primary">Gerar novo Pix</button>
 </form>{% endif %}<a class="button ghost" href="{{ url_for('client_area',aba='pacotes') }}">Voltar aos pacotes</a>
 </section>{% endblock %}{% block scripts %}<script src="{{ url_for('static',filename='plan.js',v='conta-plano-v2') }}" defer>
 </script>{% endblock %}

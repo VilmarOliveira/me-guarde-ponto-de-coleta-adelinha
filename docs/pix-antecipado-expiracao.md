@@ -25,3 +25,15 @@ do cliente, reutilização da nova cobrança, resposta paga, pagamento tardio,
 consulta indisponível, identidade divergente, prazo futuro/inválido, QR Code
 diferente sem validade e estados `approved`/`under_review`. Nenhuma cobrança
 real é gerada pelos testes.
+
+## Modalidade ao solicitar outro Pix
+
+O botão `Gerar novo Pix` identifica a cobrança expirada e preserva a intenção
+Pix Fast na conferência e na criação. A prioridade de Dinheiro ou Pix AI não
+substitui silenciosamente essa escolha. O fluxo comum de pagamento continua
+seguindo a ordem configurada no painel.
+
+A nova solicitação respeita a habilitação, os limites e a disponibilidade atual
+do Pix Fast. Se não for elegível, informa a indisponibilidade sem criar cobrança
+em dinheiro. O servidor valida o cliente, os pacotes e a situação da cobrança
+original, e confere novamente a elegibilidade na criação.

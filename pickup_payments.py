@@ -280,7 +280,7 @@ def apply(db, oid, data, value):
     if other:
         raise GatewayError(code="identity_mismatch")
     db.execute(
-        "UPDATE pickup_payment_orders SET transaction_id=?,checked_at=?,check_after=?,qr_text=COALESCE(?,qr_text),expires_at=COALESCE(?,expires_at),error_code=CASE WHEN error_code IN ('late_payment_review','archived_payment_review') THEN error_code ELSE NULL END WHERE id=?",
+        "UPDATE pickup_payment_orders SET transaction_id=?,checked_at=?,check_after=?,qr_text=COALESCE(?,qr_text),expires_at=CASE WHEN ?=1 THEN ? ELSE expires_at END,error_code=CASE WHEN error_code IN ('late_payment_review','archived_payment_review') THEN error_code ELSE NULL END WHERE id=?",
         (
             tid,
             ps.iso(value),
@@ -291,6 +291,12 @@ def apply(db, oid, data, value):
                 and len(data["qr_code_text"]) <= 4096
                 else None
             ),
+            int(bool(data.get("qr_code_expires_at")) or (
+                isinstance(data.get("qr_code_text"), str)
+                and len(data["qr_code_text"]) <= 4096
+                and bool(data["qr_code_text"])
+                and data["qr_code_text"] != order["qr_text"]
+            )),
             ps.safe_time(data.get("qr_code_expires_at")),
             oid,
         ),
@@ -383,6 +389,18 @@ def refresh(db, app, oid, value):
         )
         if data is None:
             return False
+        # Fast can keep a transaction pending after its QR Code has expired.
+        # Only release it after a fresh, correlated API lookup, never on a
+        # browser timer or webhook status alone. Later payments remain subject
+        # to apply()'s late_payment_review protection.
+        validate(order, data)
+        if data.get("status") == "pending":
+            expires = ps.safe_time(data.get("qr_code_expires_at"))
+            same_qr = not data.get("qr_code_text") or data["qr_code_text"] == order["qr_text"]
+            if not expires and not data.get("qr_code_expires_at") and same_qr:
+                expires = ps.safe_time(order["expires_at"])
+            if expires and ps.parse(expires) <= value:
+                data = {**data, "status": "expired"}
         apply(db, oid, data, value)
         return True
     except (GatewayError, DatabaseIntegrityError) as e:

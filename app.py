@@ -2293,7 +2293,7 @@ def ensure_columns(connection, table, definitions):
 
 def table_columns(connection, table):
     if connection.postgres:
-        rows = connection.execute("SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name=?", (table,)).fetchall()
+        rows = connection.execute("SELECT attname AS column_name FROM pg_attribute WHERE attrelid=to_regclass(?) AND attnum>0 AND NOT attisdropped", (table,)).fetchall()
         return {row["column_name"] for row in rows}
     return {row[1] for row in connection.execute(f"PRAGMA table_info({table})")}
 

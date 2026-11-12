@@ -22,3 +22,5 @@ O limite existente de seleção continua em 150 pacotes. Consultas respeitam o i
 ## Verificação
 
 Testes simulados cobrem seleção com dois ou mais pacotes, múltiplos Pix anteriores, dedução de pagamento, criação repetida, falha e incerteza na API, erro no banco, alteração do saldo, pagamento tardio, consulta dos predecessores e concorrência no PostgreSQL em esquema isolado. A recuperação de senha é exercitada com OAuth e Gmail simulados. A validação dos elementos verifica ícones únicos e preservação dos formulários; não substitui inspeção visual em navegador real.
+
+A inspeção de colunas PostgreSQL identifica a tabela visível pela conexão, inclusive em esquema isolado; a migração não presume que todas as tabelas estejam em public. No CI, os testes transacionais do agrupamento rodam primeiro e o restante da suíte roda depois, sem repetir o mesmo arquivo.

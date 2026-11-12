@@ -467,6 +467,23 @@ def fast_pix_window_ended(order, value):
     )
 
 
+def verified_pix_expired(order, data, value):
+    """Call only after correlating a fresh provider lookup to this order."""
+    if (
+        order["local_method"] != "Pix Fast"
+        or dict(order).get("method", "pix") != "pix"
+        or order["state"] != "pending"
+        or order["paid_at"]
+        or data.get("status") != "pending"
+    ):
+        return False
+    expires = safe_time(data.get("qr_code_expires_at"))
+    same_qr = not data.get("qr_code_text") or data["qr_code_text"] == order["qr_text"]
+    if not expires and not data.get("qr_code_expires_at") and same_qr:
+        expires = safe_time(order["expires_at"])
+    return bool(expires and parse(expires) <= value)
+
+
 def payment_code(order, value):
     if order["archived_at"] or not order["qr_text"]:
         return None
@@ -514,7 +531,7 @@ def activate_order(db, order, value):
     grant_due(db, order["client_id"], value)
 
 
-def apply_transaction(db, order_id, data, value):
+def apply_transaction(db, order_id, data, value, *, expire_pending_pix=False):
     original = db.execute(
         "SELECT * FROM plan_orders WHERE id=?", (order_id,)
     ).fetchone()
@@ -550,6 +567,9 @@ def apply_transaction(db, order_id, data, value):
         ).fetchone()
     )
     validate_transaction(order, data)
+    locally_expired = expire_pending_pix and verified_pix_expired(order, data, value)
+    if locally_expired:
+        state = "expired"
     other = db.execute(
         "SELECT id FROM plan_orders WHERE transaction_id=? AND id!=?", (tid, order_id)
     ).fetchone()
@@ -576,12 +596,15 @@ def apply_transaction(db, order_id, data, value):
         else None
     )
     db.execute(
-        """UPDATE plan_orders SET transaction_id=?,checked_at=?,check_after=?,qr_text=COALESCE(?,qr_text),expires_at=COALESCE(?,expires_at),settlement_state=?,card_brand=?,card_last4=?,error_code=CASE WHEN state IN ('admin_cancelled','cancel_requested') OR error_code IN ('duplicate_manual_and_fast_payment','archived_payment_review','payment_after_cancellation') THEN error_code ELSE NULL END WHERE id=?""",
+        """UPDATE plan_orders SET transaction_id=?,checked_at=?,check_after=?,qr_text=COALESCE(?,qr_text),expires_at=CASE WHEN ?=1 THEN ? ELSE expires_at END,settlement_state=?,card_brand=?,card_last4=?,error_code=CASE WHEN state IN ('admin_cancelled','cancel_requested') OR error_code IN ('duplicate_manual_and_fast_payment','archived_payment_review','payment_after_cancellation') THEN error_code ELSE NULL END WHERE id=?""",
         (
             tid,
             iso(value),
             iso(value + timedelta(seconds=20)),
             qr if isinstance(qr, str) and len(qr) <= 4096 else None,
+            int(bool(data.get("qr_code_expires_at")) or (
+                isinstance(qr, str) and bool(qr) and len(qr) <= 4096 and qr != order["qr_text"]
+            )),
             expires,
             settlement,
             brand,
@@ -592,6 +615,9 @@ def apply_transaction(db, order_id, data, value):
     cycle = db.execute(
         "SELECT * FROM plan_cycles WHERE order_id=?", (order_id,)
     ).fetchone()
+    if locally_expired and not cycle:
+        db.execute("UPDATE plan_orders SET cancel_state='closed' WHERE id=?", (order_id,))
+        order["cancel_state"] = "closed"
     manual_approval = db.execute(
         "SELECT 1 FROM plan_admin_decisions WHERE order_id=? AND action='approve'",
         (order_id,),

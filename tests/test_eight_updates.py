@@ -134,7 +134,7 @@ def test_expired_plan_verified_then_retry_no_duplicates(
             == old_cycles + 1
         )
         assert "Gerar novo Pix" not in page
-    elif status in ("expired", "cancelled"):
+    elif status in ("expired", "cancelled", "pending"):
         assert "Gerar novo Pix" in page
         # A new attempt preserves the quoted amount even if the monthly price changes.
         db.execute("UPDATE settings SET monthly_price_cents=3990")

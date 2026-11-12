@@ -11,7 +11,7 @@
 <button class="button primary" type="button" data-copy="#plan-pix">Copiar código Pix</button>{% if order.expires_at %}<p>Válido até {{ order.expires_at|local_datetime }}.</p>{% endif %}</div>{% endif %}
 {% if order.error_code %}<details><summary>Detalhes da consulta</summary>{% if order.error_code=='provider_forbidden' %}<p class="flash error" role="alert">A Fast recusou a consulta ou o cancelamento desta transação (HTTP 403). Nenhum novo Pix foi gerado e o estado anterior foi preservado. Consulte novamente mais tarde ou solicite à equipe a verificação da permissão da integração para esta cobrança. O código 403 não confirma pagamento nem cancelamento.</p>{% endif %}{% if order.error_code=='duplicate_manual_and_fast_payment' %}<p class="flash error">Foi identificado pagamento Fast adicional à confirmação manual. Entre em contato com o ponto para conferência.</p>{% elif order.error_code and order.error_code!='payment_after_cancellation' %}<p class="notice">A última consulta não pôde confirmar todos os dados. Nenhum crédito adicional será liberado sem confirmação válida. Tente consultar novamente ou contate o atendimento.</p>{% endif %}
 </details>{% endif %}
-{% if can_retry %}<form method="post" action="{{ url_for('plans.retry_payment',oid=order.id) }}">
+{% if can_retry %}{% if order.state=='expired' %}<p class="notice">Pix vencido. Você já pode solicitar um novo.</p>{% endif %}<form method="post" action="{{ url_for('plans.retry_payment',oid=order.id) }}">
 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
 <button class="button primary">Gerar novo Pix</button>
 </form>{% endif %}{% if cycle or order.state!='pending' %}<details>

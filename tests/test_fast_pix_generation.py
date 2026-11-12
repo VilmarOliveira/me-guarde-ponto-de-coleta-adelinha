@@ -14,7 +14,7 @@ from test_plan import create_cycle, post_purchase, site
 @pytest.mark.parametrize(
     "flow", ["plan", "renewal", "admin_plan", "customer_advance", "staff_advance", "pickup"]
 )
-def test_pix_uses_post_qr_and_waits_for_confirmed_expiration(payments, monkeypatch, flow):
+def test_pix_reuses_valid_qr_and_renews_after_verified_expiration(payments, monkeypatch, flow):
     _, client, db, fake = payments
     if flow in ("plan", "renewal"):
         if flow == "renewal":
@@ -64,14 +64,21 @@ def test_pix_uses_post_qr_and_waits_for_confirmed_expiration(payments, monkeypat
     db.commit()
     expired_page = client.get(first_url).text
     assert "data-plan-pix" not in expired_page
-    assert "O prazo do QR Code terminou." in expired_page
     assert client.get(first_url + "/status").json["pix_available"] is False
-    assert create() == first_url
-    assert fake.creates == initial_creates + 1
-
-    fake.records[str(initial_creates + 1)]["status"] = "expired"
-    db.execute(f"UPDATE {table} SET check_after=NULL WHERE id=?", (first_id,))
-    db.commit()
+    if table == "plan_orders":
+        assert "O prazo do QR Code terminou." in expired_page
+        assert create() == first_url
+        assert fake.creates == initial_creates + 1
+        fake.records[str(initial_creates + 1)]["status"] = "expired"
+        db.execute(f"UPDATE {table} SET check_after=NULL WHERE id=?", (first_id,))
+        db.commit()
+    else:
+        assert db.execute(f"SELECT state FROM {table} WHERE id=?", (first_id,)).fetchone()["state"] == "expired"
+        if flow == "customer_advance":
+            assert "Gerar novo Pix" in expired_page
+            assert "Pix vencido. Você já pode solicitar um novo." in expired_page
+        # The provider still reports pending; the verified QR deadline is enough.
+        assert fake.records[str(initial_creates + 1)]["status"] == "pending"
     second_url = create()
     assert second_url != first_url
     assert 'data-plan-pix' in client.get(second_url).text

@@ -1,6 +1,9 @@
 """Expired QR renewal: simulated API only; never creates a real charge."""
 
 from datetime import datetime, timedelta
+import json
+
+import payment_policies as policies
 
 import pytest
 
@@ -11,10 +14,10 @@ from test_customer_payments import package, payments, signed
 from test_plan import site
 
 
-def create(client, pid):
+def create(client, pid, retry_id=""):
     return client.post(
         "/cliente/pacotes/pagar/gerar",
-        data={"package_ids": [pid], "csrf_token": token(client)},
+        data={"package_ids": [pid], "csrf_token": token(client), "retry_order_id": retry_id},
     )
 
 
@@ -93,3 +96,104 @@ def test_paid_status_wins_over_expired_deadline(payments):
     assert db.execute("SELECT state FROM pickup_payment_orders WHERE id=?", (oid,)).fetchone()["state"] == "paid"
     assert create(client, pid).status_code == 400 and fake.creates == 1
     assert db.execute("SELECT 1 FROM package_prepayments").fetchone()
+
+
+def cash_first(db, fast_enabled=True):
+    rules = policies.defaults()
+    for rule in rules:
+        rule["priority"] = {"Dinheiro": 1, "Pix Fast": 2, "Pix AI": 3}[rule["method"]]
+        if rule["method"] == "Pix Fast":
+            rule["enabled"] = fast_enabled
+    db.execute("UPDATE customer_payment_policies SET rules=? WHERE scope='advance'", (json.dumps(rules),))
+    db.commit()
+
+
+def test_retry_keeps_fast_when_admin_prioritizes_cash(payments):
+    _, client, db, fake = payments
+    pid, oid, url = expired_order(client, db, fake)
+    assert "Gerar novo Pix" in client.get(url).text
+    cash_first(db)
+    response = client.post("/cliente/pacotes/pagar", data={
+        "package_ids": [pid], "csrf_token": token(client), "retry_order_id": oid,
+    })
+    assert response.status_code == 200
+    assert 'name="retry_order_id" value="' + oid + '"' in response.text
+    assert "Gerar Pix Fast" in response.text
+    assert "Pague com dinheiro" not in response.text
+    result = create(client, pid, oid)
+    assert result.status_code == 200 and fake.creates == 2
+    row = db.execute("SELECT * FROM pickup_payment_orders WHERE id=?", (result.json["id"],)).fetchone()
+    assert row["local_method"] == "Pix Fast" and row["transaction_id"] == "2"
+    assert create(client, pid, oid).json["id"] == row["id"] and fake.creates == 2
+
+
+@pytest.mark.parametrize("unavailable", ["disabled", "paused", "range", "not_configured", "paid_source", "wrong_packages", "foreign_source"])
+def test_retry_never_falls_back_to_cash(payments, unavailable):
+    app, client, db, fake = payments
+    pid, oid, url = expired_order(client, db, fake)
+    client.get(url)
+    cash_first(db, fast_enabled=unavailable != "disabled")
+    if unavailable == "paused":
+        app.config["FASTFLOW_NEW_CHARGES_ENABLED"] = "0"
+    elif unavailable == "not_configured":
+        app.config["FASTFLOW_ENABLED"] = "0"
+    elif unavailable == "range":
+        rules = policies.rules(db, "advance")
+        next(r for r in rules if r["method"] == "Pix Fast")["minimum"] = 5000
+        db.execute("UPDATE customer_payment_policies SET rules=? WHERE scope='advance'", (json.dumps(rules),))
+    elif unavailable == "paid_source":
+        db.execute("UPDATE pickup_payment_orders SET paid_at=? WHERE id=?", (datetime.now(TZ).isoformat(), oid))
+    elif unavailable == "wrong_packages":
+        pid = package(db, number=2)
+    elif unavailable == "foreign_source":
+        # An authenticated different customer must not access the original order.
+        db.execute("INSERT INTO clients(id,name,cpf,phone,terms_version,signature,accepted_at) VALUES(999,'Outro cliente','12345678909','16999999999','test','test',?)", (datetime.now(TZ).isoformat(),))
+        db.execute("UPDATE pickup_payment_orders SET client_id=999 WHERE id=?", (oid,))
+    db.commit()
+    review = client.post("/cliente/pacotes/pagar", data={
+        "package_ids": [pid], "csrf_token": token(client), "retry_order_id": oid,
+    })
+    assert review.status_code in (302, 404)
+    assert 'id="advance-create"' not in review.text
+    result = create(client, pid, oid)
+    assert result.status_code in (400, 404) and fake.creates == 1
+    assert db.execute("SELECT COUNT(*) n FROM pickup_payment_orders").fetchone()["n"] == 1
+
+
+def test_normal_checkout_respects_cash_priority(payments):
+    _, client, db, fake = payments
+    pid = package(db)
+    cash_first(db)
+    result = create(client, pid)
+    assert result.status_code == 200 and fake.creates == 0
+    assert db.execute("SELECT local_method FROM pickup_payment_orders").fetchone()["local_method"] == "Dinheiro"
+
+
+def test_retry_rechecks_fast_availability_after_review(payments):
+    _, client, db, fake = payments
+    pid, oid, url = expired_order(client, db, fake)
+    client.get(url)
+    review = client.post("/cliente/pacotes/pagar", data={
+        "package_ids": [pid], "csrf_token": token(client), "retry_order_id": oid,
+    })
+    assert review.status_code == 200 and 'id="advance-create"' in review.text
+    cash_first(db, fast_enabled=False)
+    result = create(client, pid, oid)
+    assert result.status_code == 400 and "Pix Fast indisponível" in result.json["error"]
+    assert fake.creates == 1
+    assert db.execute("SELECT COUNT(*) n FROM pickup_payment_orders").fetchone()["n"] == 1
+
+
+def test_retry_does_not_modify_an_existing_cash_order(payments):
+    _, client, db, fake = payments
+    pid, oid, url = expired_order(client, db, fake)
+    client.get(url)
+    cash_first(db)
+    cash = create(client, pid).json["id"]
+    db.execute("UPDATE pickup_payment_orders SET advance=0 WHERE id=?", (cash,))
+    db.commit()
+    response = create(client, pid, oid)
+    assert response.status_code == 400
+    row = db.execute("SELECT * FROM pickup_payment_orders WHERE id=?", (cash,)).fetchone()
+    assert row["local_method"] == "Dinheiro" and row["advance"] == 0
+    assert fake.creates == 1

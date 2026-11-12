@@ -509,6 +509,7 @@ def reserve(
     advance=False,
     reprice=None,
     selector=None,
+    required_method=None,
 ):
     cents = round(snapshot["final_total"] * 100)
     if len({p["client_id"] for p in packages}) != 1:
@@ -540,6 +541,8 @@ def reserve(
                     (old[0]["order_id"],),
                 ).fetchone()
             )
+            if required_method and order["local_method"] != required_method:
+                raise ValueError("Já existe uma cobrança em outra modalidade. Consulte os pacotes.")
             same = (
                 sorted(p["id"] for p in json.loads(order["snapshot"])["packages"])
                 == ids
@@ -748,6 +751,33 @@ def install(
             abort(404)
         return row
 
+    def retry_source(ids):
+        oid = request.form.get("retry_order_id", "")
+        if not oid:
+            return None
+        original = client_order(oid)
+        if (
+            original["local_method"] != "Pix Fast"
+            or original["state"] != "expired"
+            or original["paid_at"]
+            or original["error_code"]
+            or original["archived_at"]
+            or sorted(p["id"] for p in json.loads(original["snapshot"])["packages"]) != ids
+        ):
+            raise ValueError("Esta cobrança não permite gerar outro Pix. Consulte os pacotes.")
+        return original["id"]
+
+    def advance_choice(cents, client_id, retry_id=None):
+        configured = None
+        if retry_id:
+            configured = [r for r in policies.rules(db(), "advance") if r["method"] == "Pix Fast"]
+        choice = policies.select(
+            db(), app, "advance", cents, configured=configured, client_id=client_id
+        )
+        if retry_id and (not choice or choice["method"] != "Pix Fast"):
+            raise ValueError("Pix Fast indisponível para uma nova cobrança. Confira a configuração no ponto e tente novamente.")
+        return choice
+
     @bp.post("/painel/retirada/pix-fast")
     @staff_required
     def create():
@@ -773,6 +803,7 @@ def install(
                 raise ValueError("Pacote não encontrado.")
             if client_id is not None and any(p["client_id"] != client_id for p in rows):
                 abort(404)
+            retry_id = retry_source(ids) if client_id is not None else None
             form = {} if client_id is not None else request.form
             snapshot = quote(rows, form, fees)
             cfg = Settings.from_config(app.config)
@@ -788,6 +819,8 @@ def install(
             snapshot["payer_document"] = re.sub(r"\D", "", owner["cpf"])
 
             def reprice(locked):
+                if retry_id:
+                    retry_source(ids)
                 fresh = {
                     **quote(locked, form, fees),
                     "payer_document": snapshot["payer_document"],
@@ -818,12 +851,11 @@ def install(
                 now(),
                 cfg,
                 advance=advance,
+                required_method="Pix Fast" if retry_id else None,
                 reprice=reprice,
                 selector=(
                     (
-                        lambda cents: policies.select(
-                            db(), app, "advance", cents, client_id=rows[0]["client_id"]
-                        )
+                        lambda cents: advance_choice(cents, rows[0]["client_id"], retry_id)
                     )
                     if advance
                     else None
@@ -991,6 +1023,7 @@ def install(
             )
             if len(rows) != len(ids):
                 abort(404)
+            retry_id = retry_source(ids)
             refresh_ended_reservations(db(), app, ids, now())
             held = (
                 db()
@@ -1005,6 +1038,8 @@ def install(
             if held:
                 if len(held) == 1:
                     old = client_order(held[0]["order_id"])
+                    if retry_id and old["local_method"] != "Pix Fast":
+                        raise ValueError("Já existe uma cobrança em outra modalidade. Consulte os pacotes.")
                     if (
                         sorted(p["id"] for p in json.loads(old["snapshot"])["packages"])
                         == ids
@@ -1037,25 +1072,13 @@ def install(
                     "Pacotes já vinculados a outro Pix pendente. Consulte a cobrança existente."
                 )
             snap = quote(rows, {}, fees)
+            choice = advance_choice(round(snap["final_total"] * 100), session["client_id"], retry_id)
             return render_template(
                 "advance_review.html",
                 snapshot=snap,
-                choice=policies.select(
-                    db(),
-                    app,
-                    "advance",
-                    round(snap["final_total"] * 100),
-                    client_id=session["client_id"],
-                ),
-                allowed=snap["final_total"] > 0
-                and policies.select(
-                    db(),
-                    app,
-                    "advance",
-                    round(snap["final_total"] * 100),
-                    client_id=session["client_id"],
-                )
-                is not None,
+                choice=choice,
+                retry_order_id=retry_id,
+                allowed=snap["final_total"] > 0 and choice is not None,
                 range_message=FAST_RANGE_MESSAGE,
             )
         except ValueError as error:

@@ -182,3 +182,18 @@ def test_retry_rechecks_fast_availability_after_review(payments):
     assert result.status_code == 400 and "Pix Fast indisponível" in result.json["error"]
     assert fake.creates == 1
     assert db.execute("SELECT COUNT(*) n FROM pickup_payment_orders").fetchone()["n"] == 1
+
+
+def test_retry_does_not_modify_an_existing_cash_order(payments):
+    _, client, db, fake = payments
+    pid, oid, url = expired_order(client, db, fake)
+    client.get(url)
+    cash_first(db)
+    cash = create(client, pid).json["id"]
+    db.execute("UPDATE pickup_payment_orders SET advance=0 WHERE id=?", (cash,))
+    db.commit()
+    response = create(client, pid, oid)
+    assert response.status_code == 400
+    row = db.execute("SELECT * FROM pickup_payment_orders WHERE id=?", (cash,)).fetchone()
+    assert row["local_method"] == "Dinheiro" and row["advance"] == 0
+    assert fake.creates == 1

@@ -509,6 +509,7 @@ def reserve(
     advance=False,
     reprice=None,
     selector=None,
+    required_method=None,
 ):
     cents = round(snapshot["final_total"] * 100)
     if len({p["client_id"] for p in packages}) != 1:
@@ -540,6 +541,8 @@ def reserve(
                     (old[0]["order_id"],),
                 ).fetchone()
             )
+            if required_method and order["local_method"] != required_method:
+                raise ValueError("Já existe uma cobrança em outra modalidade. Consulte os pacotes.")
             same = (
                 sorted(p["id"] for p in json.loads(order["snapshot"])["packages"])
                 == ids
@@ -848,6 +851,7 @@ def install(
                 now(),
                 cfg,
                 advance=advance,
+                required_method="Pix Fast" if retry_id else None,
                 reprice=reprice,
                 selector=(
                     (
@@ -857,8 +861,6 @@ def install(
                     else None
                 ),
             )
-            if retry_id and item["local_method"] != "Pix Fast":
-                raise ValueError("Já existe uma cobrança em outra modalidade. Consulte os pacotes.")
             if new and item["local_method"] == "Pix Fast":
                 import plan_routes
 

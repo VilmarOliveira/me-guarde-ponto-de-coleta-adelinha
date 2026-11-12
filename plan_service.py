@@ -485,7 +485,8 @@ def verified_pix_expired(order, data, value):
 
 
 def payment_code(order, value):
-    if order["archived_at"] or not order["qr_text"]:
+    if (order["archived_at"] or not order["qr_text"] or dict(order).get("superseded_at")
+        or order["error_code"] in ("superseded_payment_review", "prior_payment_review")):
         return None
     if order["local_method"] == "Pix AI":
         return (

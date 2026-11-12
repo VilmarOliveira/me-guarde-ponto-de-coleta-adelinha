@@ -19,8 +19,8 @@ EMAIL_SIGNATURE = "ME GUARDE — COMPROU? DEIXA COM A GENTE."
 
 def notification_config_status():
     """Retorna o estado da configuração sem expor segredos."""
-    email_ready = all((os.getenv("GMAIL_CLIENT_ID"), os.getenv("GMAIL_CLIENT_SECRET"),
-                       os.getenv("GMAIL_REFRESH_TOKEN"))) and os.getenv("GMAIL_SENDER", GMAIL_SENDER).lower() == GMAIL_SENDER
+    email_ready = all((os.getenv("GMAIL_CLIENT_ID", "").strip(), os.getenv("GMAIL_CLIENT_SECRET", "").strip(),
+                       os.getenv("GMAIL_REFRESH_TOKEN", "").strip())) and os.getenv("GMAIL_SENDER", GMAIL_SENDER).strip().lower() == GMAIL_SENDER
     whatsapp_ready = all((os.getenv("WHATSAPP_ACCESS_TOKEN"), os.getenv("WHATSAPP_PHONE_NUMBER_ID"),
                           os.getenv("WHATSAPP_TEMPLATE_NAME"), os.getenv("WHATSAPP_GRAPH_VERSION")))
     return {"email": bool(email_ready), "whatsapp": bool(whatsapp_ready)}
@@ -51,9 +51,9 @@ def _json_http_error(error, provider):
 
 
 def _gmail_access_token():
-    client_id = os.getenv("GMAIL_CLIENT_ID")
-    client_secret = os.getenv("GMAIL_CLIENT_SECRET")
-    refresh_token = os.getenv("GMAIL_REFRESH_TOKEN")
+    client_id = os.getenv("GMAIL_CLIENT_ID", "").strip()
+    client_secret = os.getenv("GMAIL_CLIENT_SECRET", "").strip()
+    refresh_token = os.getenv("GMAIL_REFRESH_TOKEN", "").strip()
     if not all((client_id, client_secret, refresh_token)):
         return None, "Gmail não configurado: confira Client ID, Client Secret e Refresh Token"
     request = Request("https://oauth2.googleapis.com/token", data=urlencode({
@@ -65,14 +65,34 @@ def _gmail_access_token():
     try:
         with urlopen(request, timeout=20) as response:
             result = json.loads(response.read().decode("utf-8"))
-        token = result.get("access_token")
-        if not token:
+        token = result.get("access_token") if isinstance(result, dict) else None
+        if not isinstance(token, str) or not token.strip():
             return None, "O Google não retornou um token de acesso"
         return token, None
     except HTTPError as error:
-        return None, _json_http_error(error, "OAuth do Google")
+        try:
+            code = json.loads(error.read().decode("utf-8")).get("error")
+        except (ValueError, UnicodeError, AttributeError):
+            code = None
+        code = code if isinstance(code, str) else None
+        hints = {
+            "invalid_client": "invalid_client: confira GMAIL_CLIENT_ID e GMAIL_CLIENT_SECRET do mesmo cliente OAuth",
+            "invalid_grant": "invalid_grant: renove GMAIL_REFRESH_TOKEN usando esse mesmo ID e segredo",
+            "unauthorized_client": "unauthorized_client: confira a autorização do cliente OAuth para envio de e-mails",
+        }
+        return None, f"OAuth do Google recusou a autorização ({error.code}). " + hints.get(code, "Confira a configuração do Gmail no servidor")
     except (URLError, OSError, ValueError, json.JSONDecodeError):
         return None, "Não foi possível renovar a autorização do Gmail"
+
+
+def gmail_authorization_status():
+    """Checks the OAuth grant only; never returns tokens or sends a message."""
+    if os.getenv("GMAIL_SENDER", GMAIL_SENDER).strip().lower() != GMAIL_SENDER:
+        return False, "Confira GMAIL_SENDER: o remetente deve ser pontodecoletaadelinha@gmail.com"
+    token, error = _gmail_access_token()
+    if not token:
+        return False, error
+    return True, "Autorização do Gmail validada. Teste a recuperação de senha para confirmar o envio do e-mail."
 
 
 def send_email(destination, subject, body, *, html_body=None):

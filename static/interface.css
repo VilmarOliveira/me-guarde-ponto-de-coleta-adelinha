@@ -125,3 +125,10 @@
 }
 
 @media print { [data-interface-decoration] { display: none !important; } }
+
+@media screen {
+  .single-package-prices .package-price-small > .ui-icon { width:48px; height:48px; padding:5px; box-sizing:content-box; }
+  .single-package-prices .package-price-large > .ui-icon { width:68px; height:68px; padding:5px; box-sizing:content-box; }
+  .single-package-prices > article { gap:14px; }
+  .customer-metrics h3 > .ui-icon { width:28px; height:28px; flex:none; }
+}

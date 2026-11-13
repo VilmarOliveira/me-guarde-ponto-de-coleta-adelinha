@@ -55,7 +55,12 @@ def test_identity_tabs_and_selected_endpoint(payments, path, label):
     positions = [nav.index(text) for _, text in IDENTITY]
     assert positions == sorted(positions)
     assert f'href="{path}" aria-current="page">{label}</a>' in nav
-    assert "Voltar para Configurações" in nav
+    if path == "/painel/configuracoes/identidade":
+        assert "Voltar para Configurações" not in nav
+        assert "> Configurações</a>" in response.text
+        assert "Gerenciar banners" not in response.text
+    else:
+        assert "Voltar para Configurações" in nav
 
 
 def test_save_does_not_leave_selected_section_or_erase_another(payments):

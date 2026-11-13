@@ -763,11 +763,13 @@ def install(
             if only_unpaid
             else ""
         )
-        show_archived = request.args.get("arquivadas") == "1"
+        archive_filter = request.args.get("lista", "arquivadas" if request.args.get("arquivadas") == "1" else "ativas")
+        if archive_filter not in ("ativas", "arquivadas", "todas"):
+            abort(400)
+        show_archived = archive_filter == "arquivadas"
         order_filter += " AND o.state!='historical_entitlement'"
-        order_filter += " AND o.archived_at IS " + (
-            "NOT NULL" if show_archived else "NULL"
-        )
+        if archive_filter != "todas":
+            order_filter += " AND o.archived_at IS " + ("NOT NULL" if show_archived else "NULL")
         order_rows = (
             db()
             .execute(
@@ -827,6 +829,7 @@ def install(
         return render_template(
             "plan_admin.html",
             show_archived=show_archived,
+            archive_filter=archive_filter,
             orders_page=orders_page,
             orders_next=len(order_rows) > 100,
             only_unpaid=only_unpaid,
@@ -1036,20 +1039,35 @@ def install(
         )
         return decision_screen(person, order, action)
 
+    def archive_destination():
+        selected = request.form.get("lista", "ativas")
+        if selected not in ("ativas", "arquivadas", "todas"):
+            selected = "ativas"
+        return url_for("plans.admin_hub", lista=selected, q=request.form.get("q", "")[:100], only_unpaid=1 if request.form.get("only_unpaid") == "1" else 0)
+
     @bp.post("/painel/configuracoes/plano/pagamentos/<oid>/arquivar")
     @admin_required
     def archive_payment(oid):
         admin()
         try:
-            billing_archive.archive(
-                db(), "plan_orders", oid, actor()["key"], service.iso(now())
-            )
-            flash(
-                "Cobrança arquivada. O acompanhamento do pagamento continua.", "success"
-            )
+            billing_archive.archive(db(), "plan_orders", oid, actor()["key"], service.iso(now()))
+            flash("Cobrança arquivada. O acompanhamento do pagamento continua.", "success")
         except ValueError as exc:
+            db().rollback()
             flash(str(exc), "error")
-        return redirect(url_for("plans.admin_hub"))
+        return redirect(archive_destination())
+
+    @bp.post("/painel/configuracoes/plano/pagamentos/<oid>/restaurar")
+    @admin_required
+    def restore_payment(oid):
+        admin()
+        try:
+            billing_archive.restore(db(), "plan_orders", oid, actor()["key"], service.iso(now()))
+            flash("Solicitação restaurada na lista principal. O estado do pagamento foi preservado.", "success")
+        except ValueError as exc:
+            db().rollback()
+            flash(str(exc), "error")
+        return redirect(archive_destination())
 
     @bp.route("/painel/configuracoes/plano/pagamentos/<oid>", methods=["GET", "POST"])
     @admin_required

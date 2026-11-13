@@ -20,7 +20,7 @@ def test_home_login_labels_and_deferred_banners(payments):
         and "Antes de fazer sua compra, crie sua conta" not in home
     )
     assert (
-        "> LOGIN</a>" in home
+        "> Login</a>" in home
         and 'href="/cliente/login" data-metric="area_cliente"' in home
     )
     customer(client)

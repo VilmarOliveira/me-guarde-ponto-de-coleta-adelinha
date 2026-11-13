@@ -50,10 +50,11 @@ fs.mkdirSync(out, {recursive:true});
       await visit('/__visual__/staff','staff-home');
       const shortcuts=await page.locator('.dashboard-shortcuts').boundingBox();
       assert.ok(Math.abs(shortcuts.x+shortcuts.width/2-width/2)<2);
-      await visit('/painel/configuracoes','settings');
-      assert.equal(await page.locator('.settings-card').filter({hasText:'Envio de códigos'}).locator('svg[data-icon="mail-code"]').count(),1);
       const methods = await page.locator('[name=payment_method]').evaluateAll(els=>els.map(e=>e.value));
       assert.deepEqual(methods,['Pix Fast','Pix AI','Dinheiro']);
+      await visit('/painel/configuracoes','settings');
+      assert.equal(await page.locator('.settings-card').filter({hasText:'Envio de códigos'}).locator('svg[data-icon="mail-code"]').count(),1);
+
       await visit('/painel/retiradas/historico','history');
       assert.equal(await page.getByLabel('Data específica').count(),0);
       await visit('/painel/configuracoes/pagamentos-cliente','payment-order');

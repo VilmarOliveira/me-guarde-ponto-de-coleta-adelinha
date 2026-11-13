@@ -35,7 +35,7 @@ def customer(tab):
 
 @app.get('/__visual__/staff')
 def staff():
-    session.clear();session.update(staff='fixture',csrf_token='visual-fixture-only')
+    session.clear();session.update(staff='fixture',staff_legacy=True,csrf_token='visual-fixture-only')
     return redirect(url_for('dashboard'))
 
 client = app.test_client()

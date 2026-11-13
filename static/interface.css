@@ -229,3 +229,13 @@
     main :is(.two,.three) { grid-template-columns:minmax(0,1fr); }
   }
 }
+
+@media screen and (max-width:600px) {
+  .plan-orders-table, .plan-orders-table tbody, .plan-orders-table tr, .plan-orders-table td { display:block; width:100%; min-width:0; }
+  .plan-orders-table thead { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); }
+  .plan-orders-table tr { border-bottom:2px solid var(--line); }
+  .plan-orders-table td { padding:12px; text-align:left; border:0; overflow-wrap:anywhere; }
+  .plan-orders-table td[data-label]::before { content:attr(data-label); display:block; font-weight:750; color:var(--teal); margin-bottom:6px; }
+  .plan-orders-table .archive-actions { align-items:stretch; }
+  .plan-orders-table .archive-actions :is(.button,form) { width:100%; }
+}

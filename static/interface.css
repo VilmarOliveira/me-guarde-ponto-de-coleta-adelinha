@@ -231,7 +231,7 @@
 }
 
 @media screen and (max-width:600px) {
-  .plan-orders-table, .plan-orders-table tbody, .plan-orders-table tr, .plan-orders-table td { display:block; width:100%; min-width:0; }
+  .table-scroll > .plan-orders-table, .plan-orders-table tbody, .plan-orders-table tr, .plan-orders-table td { display:block; width:100%; min-width:0; }
   .plan-orders-table thead { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); }
   .plan-orders-table tr { border-bottom:2px solid var(--line); }
   .plan-orders-table td { padding:12px; text-align:left; border:0; overflow-wrap:anywhere; }

@@ -85,6 +85,7 @@ fs.mkdirSync(out, {recursive:true});
       const article=page.locator('.blog-card h2 a').first();
       if(await article.count()) {await article.click();await page.waitForLoadState('networkidle');await page.screenshot({path:`${out}/article-${width}.png`,fullPage:true});}
       await visit('/painel/configuracoes/plano','plan-admin');
+      if(width<=600) assert.ok(await page.locator('.plan-orders-table').evaluate(e=>e.scrollWidth<=e.parentElement.clientWidth+2),'plan cards overflow');
       for (const title of ['Validar participação de clientes','Ciclos e créditos']) {
         const rect=await page.locator('main > details').filter({has:page.locator('summary').filter({hasText:title})}).boundingBox();
         assert.ok(Math.abs(rect.x+rect.width/2-width/2)<2,title+' not centered');

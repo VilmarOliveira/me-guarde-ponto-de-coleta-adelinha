@@ -245,3 +245,5 @@
   }
   main > .bottom-back { margin-left:max(var(--screen-gutter,12px),calc((100% - 1180px)/2)); }
 }
+
+@media screen { .customer-area > .customer-tabs { justify-content:center; } }

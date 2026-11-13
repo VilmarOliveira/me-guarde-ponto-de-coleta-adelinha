@@ -39,6 +39,13 @@ fs.mkdirSync(out, {recursive:true});
         await visit('/__visual__/customer/'+tab);
         const edges=await page.locator('.customer-area > .panel-head, .customer-area > .customer-tabs, .customer-tab > .panel-card').evaluateAll(els=>els.map(e=>{const r=e.getBoundingClientRect();return {left:r.left,right:r.right};}));
         assert.ok(edges.length>=3,tab);
+        const rows=await page.locator('.customer-tabs').evaluate(nav=>{
+          const n=nav.getBoundingClientRect(), rows=new Map();
+          for(const button of nav.children){const r=button.getBoundingClientRect(),y=Math.round(r.top);const row=rows.get(y)||{left:r.left,right:r.right};row.left=Math.min(row.left,r.left);row.right=Math.max(row.right,r.right);rows.set(y,row);}
+          return [...rows.values()].map(row=>Math.abs((row.left+row.right)/2-(n.left+n.right)/2));
+        });
+        assert.ok(rows.every(offset=>offset<2),'customer tabs not centered: '+tab);
+
         assert.ok(edges.every(e=>Math.abs(e.left-edges[0].left)<2&&Math.abs(e.right-edges[0].right)<2),'customer alignment: '+tab+' '+JSON.stringify(edges));
       }
       await visit('/__visual__/customer/visao-geral','customer-overview');

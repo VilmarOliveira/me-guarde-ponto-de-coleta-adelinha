@@ -44,6 +44,12 @@ db = DatabaseConnection(app.config['DATABASE'])
 db.execute('UPDATE clients SET confirmation_channel=\'email\',confirmation_destination=email,confirmation_validated_at=accepted_at')
 db.execute("INSERT INTO google_client_identities(google_sub,client_id,email_at_link,linked_at) VALUES('visual-only',1,'example@example.com',?)",(int(time.time()),))
 db.commit();package(db);db.close()
-post_purchase(client)
+with client.session_transaction() as sess:
+    sess.update(client_id=1,client_session_version=1)
+purchase = post_purchase(client)
+assert purchase.status_code == 302, 'synthetic plan purchase failed'
+db = DatabaseConnection(app.config['DATABASE'])
+assert db.execute('SELECT COUNT(*) FROM plan_orders').fetchone()[0] == 1
+db.close()
 if __name__ == '__main__':
     app.run(host='127.0.0.1',port=5095)

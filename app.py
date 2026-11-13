@@ -155,6 +155,8 @@ def terms_text():
 
 def create_app(test_config=None):
     app = Flask(__name__)
+    from performance import install as install_asset_delivery
+    install_asset_delivery(app)
     app.config.update(
         SECRET_KEY=os.environ.get("SECRET_KEY", secrets.token_hex(32)),
         DATABASE=os.environ.get("DATABASE_URL") or os.environ.get("DATABASE", str(ROOT / "data" / "adelinha.db")),
@@ -276,6 +278,8 @@ def create_app(test_config=None):
 
     @app.before_request
     def csrf_protection():
+        if request.endpoint in {"static", "brand_stylesheet"} and request.method in {"GET", "HEAD"}:
+            return None
         if request.endpoint == "plans.webhook":
             return None  # Raw-body HMAC replaces browser CSRF only on this callback.
         if "csrf_token" not in session:
@@ -309,9 +313,11 @@ def create_app(test_config=None):
 
     @app.after_request
     def protect_session_pages(response):
+        if request.endpoint in {"static", "brand_stylesheet"}:
+            return response
         # A página inicial muda conforme a sessão; dados autenticados nunca devem
         # ser reaproveitados por caches compartilhados da Oracle ou do navegador.
-        if request.endpoint in {"index", "registration_page", "register", "terms", "current_contract_pdf", "client_login", "client_login_post", "privacy"} or (request.endpoint or "").startswith("google_login.") or ((session.get("staff") or session.get("client_id")) and request.endpoint not in {"header_identity", "main_service_banner", "banner_image", "site_photo_image", "explanatory_card_image"}):
+        if request.endpoint in {"index", "registration_page", "register", "terms", "current_contract_pdf", "client_login", "client_login_post", "privacy"} or (request.endpoint or "").startswith("google_login.") or ((session.get("staff") or session.get("client_id")) and request.endpoint not in {"static", "brand_stylesheet", "header_identity", "main_service_banner", "banner_image", "site_photo_image", "explanatory_card_image"}):
             response.headers["Cache-Control"] = "private, no-store, max-age=0"
             response.headers["Vary"] = "Cookie"
         if (request.endpoint or "").startswith("google_login."):

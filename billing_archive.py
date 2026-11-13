@@ -41,3 +41,23 @@ def archive(db, table, oid, actor, stamp):
         ),
     )
     db.commit()
+
+
+def restore(db, table, oid, actor, stamp):
+    """Restore visibility only; never clear a financial review or grant credits."""
+    if table not in ("plan_orders", "pickup_payment_orders"):
+        raise ValueError("Cobrança inválida.")
+    db.commit()
+    db.begin_write()
+    row = db.execute("SELECT * FROM " + table + " WHERE id=?" + (" FOR UPDATE" if db.postgres else ""), (oid,)).fetchone()
+    if not row:
+        raise ValueError("Cobrança não encontrada.")
+    if not row["archived_at"]:
+        db.commit()
+        return
+    db.execute("UPDATE " + table + " SET archived_at=NULL,archived_by=NULL WHERE id=?", (oid,))
+    db.execute("INSERT INTO audit_logs(actor,action,entity_type,entity_id,details,created_at) VALUES(?,?,?,?,?,?)", (
+        actor, "restaurar_cobranca", table, None,
+        json.dumps({"order_id":oid,"state":row["state"]},ensure_ascii=False), stamp,
+    ))
+    db.commit()

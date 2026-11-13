@@ -630,6 +630,14 @@ def apply_transaction(db, order_id, data, value, *, expire_pending_pix=False):
         )
         db.commit()
         return
+    # Restoring visibility must never turn an archived late payment into credits.
+    if order["error_code"] == "archived_payment_review" and not cycle:
+        if state == "paid":
+            db.execute("UPDATE plan_orders SET state='paid',paid_at=COALESCE(paid_at,?) WHERE id=?", (iso(value), order_id))
+        elif state == "refunded":
+            db.execute("UPDATE plan_orders SET state='refunded',refunded_at=COALESCE(refunded_at,?) WHERE id=?", (iso(value), order_id))
+        db.commit()
+        return
     if order["cancel_state"] in ("external_pending", "closed") and not cycle:
         if state == "paid":
             db.execute(

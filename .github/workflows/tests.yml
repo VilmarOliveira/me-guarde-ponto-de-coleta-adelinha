@@ -33,3 +33,42 @@ jobs:
       - run: python -m pip install -r requirements.txt
       - run: python -m pytest -q tests/test_grouped_pix.py
       - run: python -m pytest -q --ignore=tests/test_grouped_pix.py
+
+  interface:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: python -m pip install -r requirements.txt
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Prepare browser verification
+        run: |
+          npm install --prefix /tmp/adelinha-ui --no-audit --no-fund playwright@1.62.1
+          /tmp/adelinha-ui/node_modules/.bin/playwright install --with-deps chromium
+      - name: Check mobile and desktop interface
+        env:
+          NODE_PATH: /tmp/adelinha-ui/node_modules
+          UI_OUTPUT: /tmp/intuitive-ui-results
+        run: |
+          python tests/browser/serve_intuitive_ui.py > /tmp/intuitive-fixture.log 2>&1 &
+          fixture_pid=$!
+          trap 'kill "$fixture_pid" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:5095/ > /dev/null; then break; fi
+            sleep 1
+          done
+          node tests/browser/intuitive_ui.cjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: intuitive-ui-checks
+          path: |
+            /tmp/intuitive-ui-results
+            /tmp/intuitive-fixture.log
+          if-no-files-found: ignore
+          retention-days: 7

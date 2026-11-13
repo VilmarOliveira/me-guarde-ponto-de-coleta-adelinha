@@ -206,3 +206,36 @@
 .skip-link:focus { top:12px; }
 @media print { .skip-link { display:none; } }
 @media screen { .payment-order-table tbody:not(.order-ready) .order-controls { flex-wrap:wrap; } }
+
+/* Consistent alignment without changing forms, table semantics or document printing. */
+@media screen {
+  main > details.panel-card.optional-panel { width:min(1180px,calc(100% - 2 * var(--screen-gutter,12px))); margin:20px auto; }
+  .dashboard-shortcuts { width:min(1180px,calc(100% - 2 * var(--screen-gutter,12px))); margin:20px auto; justify-content:center; }
+  .actions, .uniform-actions, .contract-actions { display:flex; flex-wrap:wrap; align-items:stretch; gap:10px; }
+  .actions > .button, .actions > button, .actions > form { margin:0; min-height:44px; }
+  .contract-actions { margin:16px 0; }
+  .contract-actions > .button { display:inline-flex; align-items:center; justify-content:center; }
+  .plan-payment-label { display:flex; gap:10px; align-items:center; color:var(--teal); }
+  .plan-payment-label > .ui-icon { flex:none; width:26px; height:26px; }
+  .settings-card b { display:flex; gap:10px; align-items:center; }
+  main :is(.panel-card,.form-card,.package,.cards,.settings-grid,.three,.two) { min-width:0; }
+  main :is(h1,h2,h3,p,label,summary,.button,td) { overflow-wrap:break-word; }
+  main :is(input,select,textarea) { max-width:100%; }
+  main :is(.button,button) > .ui-icon { flex-shrink:0; }
+  .table-scroll { max-width:100%; overflow-x:auto; }
+  @media(max-width:600px) {
+    .contract-actions > .button { flex:1 1 180px; }
+    .dashboard-shortcuts > .button { flex:1 1 150px; }
+    main :is(.two,.three) { grid-template-columns:minmax(0,1fr); }
+  }
+}
+
+@media screen and (max-width:600px) {
+  .table-scroll > .plan-orders-table, .plan-orders-table tbody, .plan-orders-table tr, .plan-orders-table td { display:block; width:100%; min-width:0; }
+  .plan-orders-table thead { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); }
+  .plan-orders-table tr { border-bottom:2px solid var(--line); }
+  .plan-orders-table td { padding:12px; text-align:left; border:0; overflow-wrap:anywhere; }
+  .plan-orders-table td[data-label]::before { content:attr(data-label); display:block; font-weight:750; color:var(--teal); margin-bottom:6px; }
+  .plan-orders-table .archive-actions { align-items:stretch; }
+  .plan-orders-table .archive-actions :is(.button,form) { width:100%; }
+}

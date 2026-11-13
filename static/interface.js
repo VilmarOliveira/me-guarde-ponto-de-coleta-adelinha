@@ -6,6 +6,13 @@
     .map(item => [item.dataset.interfaceIcon, item.firstElementChild]));
   // Specific actions take precedence over objects mentioned in their labels.
   const rules = [
+    [/^contratação do plano/i, 'contract-add'],
+    [/^renovação do plano/i, 'refresh'],
+    [/^preparar exigência do contrato/i, 'contract-shield'],
+    [/^aparência/i, 'palette'],
+    [/^envio de códigos/i, 'mail-code'],
+    [/^encerrar sess/i, 'logout'],
+    [/^ver contrato/i, 'contract'],
     [/^desvincular.*google/i, 'google-unlink'],
     [/^avisos? de retirada/i, 'parcel-notice'],
     [/^pagar antes da retirada|^pagamento antecipado/i, 'wallet-clock'],
@@ -78,7 +85,7 @@
   document.querySelectorAll('main a:not(.button)').forEach(link => {
     if (/^voltar/i.test(link.textContent.trim()) && !link.closest('.article-body, .terms-text')) link.classList.add('button', 'ghost');
   });
-  document.querySelectorAll('main h1, main h2, .customer-metrics h3, main button:not([data-slide-to]):not(.payment-grip):not(.clear-signature), main a.button, main details > summary, [data-ui-icon]')
+  document.querySelectorAll('main h1, main h2, .customer-metrics h3, main button:not([data-slide-to]):not(.payment-grip):not(.clear-signature), main a.button, .settings-card b, .plan-payment-label, main details > summary, [data-ui-icon]')
     .forEach(decorate);
   const heading = document.querySelector('main h1');
   const current = document.querySelector('[data-page-current]');

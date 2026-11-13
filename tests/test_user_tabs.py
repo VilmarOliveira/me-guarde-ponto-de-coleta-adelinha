@@ -97,12 +97,13 @@ def test_default_service_banner_and_original_whatsapp_asset(users_app):
         assert len(banner.data) <= 900 * 1024
     home = client.get('/').text
     support = home.split('class="support-float', 1)[1].split('</a>', 1)[0]
-    assert 'whatsapp-original.jpg' in support and '<img' in support and '<svg' not in support
+    assert 'whatsapp-support.webp' in support and '<img' in support and '<svg' not in support
     assert 'https://wa.me/5516988004966?text=Ol%C3%A1%21%20Preciso%20de%20suporte%20com%20o%20Me%20Guarde.' in support
-    image = client.get('/static/whatsapp-original.jpg')
-    assert image.status_code == 200 and image.mimetype == 'image/jpeg'
+    image = client.get('/static/whatsapp-support.webp')
+    assert image.status_code == 200 and image.mimetype == 'image/webp'
+    assert len(image.data) < 4000
     with Image.open(io.BytesIO(image.data)) as icon:
-        assert icon.size == (554, 554)
+        assert icon.size == (112, 112)
 
 
 def test_team_pagination_keeps_search_and_all_accounts_accessible(users_app):

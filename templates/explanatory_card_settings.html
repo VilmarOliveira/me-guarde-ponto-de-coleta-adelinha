@@ -4,7 +4,7 @@
 <div class="explanatory-admin-grid">{% for card in explanatory_cards %}
 <article class="package"><h2>Cartão {{ card.id }}</h2><form method="post" enctype="multipart/form-data">
 <input type="hidden" name="card_id" value="{{ card.id }}">
-<img class="explanatory-admin-preview" data-banner-preview src="{{ url_for('explanatory_card_image',card_id=card.id,variant='computador',v=card.revision) }}" alt="{{ card.alt_text }}" width="{{ card.width }}" height="{{ card.height }}">
+<img class="explanatory-admin-preview" data-banner-preview src="{{ url_for('explanatory_card_image',card_id=card.id,variant='computador',v=card.revision) }}" alt="{{ card.alt_text }}" width="{{ card.width }}" height="{{ card.height }}" loading="lazy" decoding="async">
 {{ image_upload('Substituir imagem', 'explanatory-' ~ card.id, kind='explanatory') }}
 {% set values = attempted if attempted is defined and attempted.card_id == card.id|string else card %}
 <label>Título<input name="title" value="{{ values.title }}" required maxlength="100"></label>

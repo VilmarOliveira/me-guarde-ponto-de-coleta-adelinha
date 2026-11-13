@@ -4,14 +4,14 @@
 <div class="banner-admin-grid">
 {% for b in banners %}<article class="package"><h2>{{ 'Banner principal Me Guarde' if b.id == 0 else 'Banner adicional' }}</h2>
 <form method="post" enctype="multipart/form-data"><input type="hidden" name="banner_id" value="{{ b.id }}">
-<img class="banner-preview" data-banner-preview src="{{ b.src }}?v={{ (b.updated_at or 'default')|urlencode }}" alt="{{ b.alt_text }}">
+<img class="banner-preview" data-banner-preview src="{{ b.src }}?v={{ (b.updated_at or 'default')|urlencode }}" alt="{{ b.alt_text }}" loading="lazy" decoding="async">
 {{ image_upload('Substituir imagem', 'banner-' ~ b.id) }}
 <label>Descrição alternativa<input name="alt_text" value="{{ b.alt_text }}" required maxlength="180"></label>
 <label>Ordem<input type="number" name="position" min="1" max="{{ [3,banners|length]|max }}" value="{{ b.position }}" required></label>
 <label class="terms-check"><input type="checkbox" name="active" value="yes" {% if b.active %}checked{% endif %}> Banner ativo</label>
 <button class="button primary">{{ icon('save') }} Salvar banner</button></form></article>{% endfor %}
 {% for slot in range(banners|length,3) %}<article class="package"><h2>Banner {{ slot+1 }}</h2><form method="post" enctype="multipart/form-data">
-<img class="banner-preview" data-banner-preview hidden alt="Prévia do novo banner">{{ image_upload('Enviar imagem', 'banner-new-' ~ slot, required=true) }}
+<img class="banner-preview" data-banner-preview hidden alt="Prévia do novo banner" loading="lazy" decoding="async">{{ image_upload('Enviar imagem', 'banner-new-' ~ slot, required=true) }}
 <label>Descrição alternativa<input name="alt_text" required maxlength="180"></label><label>Ordem<input type="number" name="position" min="1" max="3" value="{{ slot+1 }}" required></label>
 <label class="terms-check"><input type="checkbox" name="active" value="yes" checked> Banner ativo</label><button class="button primary">{{ icon('save') }} Salvar banner</button></form></article>{% endfor %}</div>
 <a class="button ghost bottom-back" href="{{ url_for('settings_hub') }}">{{ icon('back') }} Voltar</a></section>{% endblock %}

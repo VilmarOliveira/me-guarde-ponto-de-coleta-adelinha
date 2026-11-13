@@ -1,4 +1,0 @@
-{% if request.endpoint not in ('index','dashboard','client_area') %}
-<nav class="page-context" aria-label="Localização no site">
-<a href="{{ url_for('dashboard') if internal_staff else url_for('client_area') if internal_client else url_for('index') }}">{{ icon('home') }} {{ 'Área do Ponto' if internal_staff else 'Área do Cliente' if internal_client else 'Início' }}</a><span data-page-separator aria-hidden="true" hidden>›</span><span data-page-current aria-current="page" hidden></span>
-</nav>{% endif %}

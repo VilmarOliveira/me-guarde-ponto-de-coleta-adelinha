@@ -20,6 +20,7 @@ fs.mkdirSync(out, {recursive:true});
       async function visit(path, name) {
         const response = await page.goto(BASE+path);
         assert.equal(response.status(),200,path);
+        assert.equal(await page.locator('.page-context, [data-page-current]').count(),0,'navigation trail remains');
         await page.waitForLoadState('networkidle');
         assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+2),'horizontal overflow: '+path);
         for (const link of await page.locator('main a.button').all()) {
@@ -31,8 +32,15 @@ fs.mkdirSync(out, {recursive:true});
       assert.equal(await page.locator('.login-mobile').textContent().then(t=>t.trim()),'Login');
       const sizes = await page.locator('.single-package-prices article > svg').evaluateAll(els=>els.map(e=>e.getBoundingClientRect().width));
       assert.ok(sizes[1]>sizes[0]);
+      for (const path of ['/duvidas-frequentes','/cadastro','/condicoes']) await visit(path);
       await visit('/cliente/login','login');
       assert.equal(await page.getByRole('button',{name:'Entrar',exact:true}).locator('svg[data-icon="login"]').count(),1);
+      for (const tab of ['visao-geral','pacotes','plano','historico','dados','contratos']) {
+        await visit('/__visual__/customer/'+tab);
+        const edges=await page.locator('.customer-area > .panel-head, .customer-area > .customer-tabs, .customer-tab > .panel-card').evaluateAll(els=>els.map(e=>{const r=e.getBoundingClientRect();return {left:r.left,right:r.right};}));
+        assert.ok(edges.length>=3,tab);
+        assert.ok(edges.every(e=>Math.abs(e.left-edges[0].left)<2&&Math.abs(e.right-edges[0].right)<2),'customer alignment: '+tab+' '+JSON.stringify(edges));
+      }
       await visit('/__visual__/customer/visao-geral','customer-overview');
       assert.equal(await page.getByRole('heading',{name:'Avisos de retirada'}).locator('svg[data-icon="parcel-notice"]').count(),1);
       await visit('/__visual__/customer/pacotes','customer-packages');
@@ -64,6 +72,11 @@ fs.mkdirSync(out, {recursive:true});
       }
       assert.equal(await page.getByRole('link',{name:'Contratação do plano',exact:true}).locator('svg[data-icon="contract-add"]').count(),1);
       assert.equal(await page.getByRole('link',{name:'Renovação do plano',exact:true}).locator('svg[data-icon="refresh"]').count(),1);
+      for (const path of ['/painel/configuracoes/aparencia','/painel/configuracoes/notificacoes','/painel/configuracoes/usuarios','/painel/configuracoes/pix','/painel/configuracoes/banners']) {
+        await visit(path);
+        const edges=await page.locator('main > .section-tabs, main > .panel-card').evaluateAll(els=>els.map(e=>{const r=e.getBoundingClientRect();return {left:r.left,right:r.right};}));
+        if(edges.length>1) assert.ok(edges.every(e=>Math.abs(e.left-edges[0].left)<2&&Math.abs(e.right-edges[0].right)<2),'staff alignment: '+path);
+      }
       await visit('/painel/configuracoes/identidade','identity');
       assert.equal(await page.getByRole('link',{name:'Aparência',exact:true}).locator('svg[data-icon="palette"]').count(),1);
       assert.equal(await page.getByRole('link',{name:'Gerenciar banners',exact:true}).count(),0);

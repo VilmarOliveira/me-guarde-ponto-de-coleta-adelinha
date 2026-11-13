@@ -87,12 +87,6 @@
   });
   document.querySelectorAll('main h1, main h2, .customer-metrics h3, main button:not([data-slide-to]):not(.payment-grip):not(.clear-signature), main a.button, .settings-card b, .plan-payment-label, main details > summary, [data-ui-icon]')
     .forEach(decorate);
-  const heading = document.querySelector('main h1');
-  const current = document.querySelector('[data-page-current]');
-  if (heading && current) {
-    current.textContent = heading.textContent.trim(); current.hidden = false;
-    document.querySelector('[data-page-separator]').hidden = false;
-  }
   document.querySelectorAll('[data-open-panel]').forEach(link => link.addEventListener('click', () => {
     const panel = document.getElementById(link.dataset.openPanel);
     if (panel?.tagName === 'DETAILS') panel.open = true;

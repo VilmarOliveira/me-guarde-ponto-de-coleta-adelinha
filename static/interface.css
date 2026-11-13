@@ -135,11 +135,6 @@
 
 /* Clear navigation and readable controls across public, customer and staff pages. */
 @media screen {
-  .page-context { display:flex; align-items:center; flex-wrap:wrap; gap:8px; margin:16px 0; font-size:.9rem; color:var(--muted); }
-  .page-context a { display:inline-flex; align-items:center; gap:6px; text-decoration:none; font-weight:650; }
-  .page-context .ui-icon { width:18px; height:18px; flex:none; }
-  .page-context [aria-current] { color:var(--ink); overflow-wrap:anywhere; }
-  .page-context [hidden] { display:none; }
   .public-mobile-actions .login-mobile { text-transform:none; }
   main { min-width:0; }
   .panel-card, .form-card, .login-card { border-radius:18px; }
@@ -187,8 +182,6 @@
   .payment-method-name { overflow-wrap:normal; }
 }
 @media screen and (max-width:767px) {
-  .page-context { font-size:.82rem; margin:12px 0; }
-  .page-context [data-page-current] { max-width:75vw; }
   .history-date-fields { grid-template-columns:1fr; }
   .blog-compose, details.optional-panel { padding:14px; }
   .blog-card > div { padding:16px; }
@@ -197,7 +190,6 @@
   .payment-order-table td:first-child, .payment-order-table th:first-child { white-space:normal; }
 }
 @media (prefers-reduced-motion:reduce) { *, *::before, *::after { scroll-behavior:auto !important; transition:none !important; } }
-@media print { .page-context { display:none; } }
 @media screen { .button > .ui-icon[data-icon="google-unlink"] { width:28px; height:28px; flex:none; } }
 
 @media screen { main h1, main h2, main h3 { overflow-wrap:anywhere; } .dashboard-shortcuts { margin:16px 0 24px; } main [id] { scroll-margin-top:20px; } }
@@ -238,4 +230,18 @@
   .plan-orders-table td[data-label]::before { content:attr(data-label); display:block; font-weight:750; color:var(--teal); margin-bottom:6px; }
   .plan-orders-table .archive-actions { align-items:stretch; }
   .plan-orders-table .archive-actions :is(.button,form) { width:100%; }
+}
+
+/* One outer content edge per page; nested customer panels do not add a second gutter. */
+@media screen {
+  .customer-area { width:min(1180px,calc(100% - 2 * var(--screen-gutter,12px))); max-width:1180px; margin-inline:auto; padding-inline:0; }
+  .customer-area > .panel-head,
+  .customer-area > .customer-tabs,
+  .customer-area > .customer-tab { width:100%; max-width:100%; margin-inline:0; }
+  .customer-area > .customer-tab > .panel-card,
+  .customer-area > .customer-tab > .form-card { width:100%; max-width:100%; margin-inline:0; }
+  main > :is(.section-tabs,.user-tabs,.payment-scope-tabs,.pagination,.uniform-actions,.actions:not(.dashboard-shortcuts)) {
+    width:min(1180px,calc(100% - 2 * var(--screen-gutter,12px))); margin-inline:auto;
+  }
+  main > .bottom-back { margin-left:max(var(--screen-gutter,12px),calc((100% - 1180px)/2)); }
 }

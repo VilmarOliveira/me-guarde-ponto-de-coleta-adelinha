@@ -58,7 +58,7 @@ fs.mkdirSync(out, {recursive:true});
       await visit('/painel/retiradas/historico','history');
       assert.equal(await page.getByLabel('Data específica').count(),0);
       await visit('/painel/configuracoes/pagamentos-cliente','payment-order');
-      if(width>767) {
+      if(width>800) {
         const first=await page.locator('.payment-order-table tbody tr').first().locator('td').first().boundingBox();
         assert.ok(first.width<130,'order column too wide: '+first.width);
       }

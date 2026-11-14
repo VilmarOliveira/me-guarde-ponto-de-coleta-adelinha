@@ -72,3 +72,30 @@ jobs:
             /tmp/intuitive-fixture.log
           if-no-files-found: ignore
           retention-days: 7
+
+  production-bootstrap:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: adelinha_test
+          POSTGRES_PASSWORD: adelinha_test
+          POSTGRES_DB: adelinha_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U adelinha_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      TEST_DATABASE_URL: postgresql://adelinha_test:adelinha_test@localhost:5432/adelinha_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: python -m pip install -r requirements.txt
+      - run: python -m pytest -q tests/test_clean_production.py
